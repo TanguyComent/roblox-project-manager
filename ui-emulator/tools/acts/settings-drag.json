@@ -1,0 +1,6 @@
+[
+  { "eval": "(() => { const h = [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'Frame' && Math.round(e.getBoundingClientRect().width) === 31)[0]; return h ? h.style.left : null })()" },
+  { "drag": [645, 226, 520, 226] },
+  { "wait": 250 },
+  { "eval": "(() => { const h = [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'Frame' && Math.round(e.getBoundingClientRect().width) === 31)[0]; return h ? h.style.left : null })()" }
+]

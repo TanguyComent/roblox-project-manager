@@ -1,0 +1,7 @@
+[
+  { "eval": "(() => { const s = [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'ScrollingFrame')[0]; return s ? { top: s.scrollTop, scrollable: s.scrollHeight - s.clientHeight } : null })()" },
+  { "wheel": [480, 250, 120] },
+  { "wait": 300 },
+  { "eval": "(() => { const s = [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'ScrollingFrame')[0]; return s ? s.scrollTop : null })()" },
+  { "shot": "shots-tower/_scrolled.png" }
+]

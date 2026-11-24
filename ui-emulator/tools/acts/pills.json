@@ -1,0 +1,3 @@
+[
+  { "eval": "(() => [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'Frame' && e.dataset.corner === '0.5,0').slice(0, 4).map(p => { const c = p.querySelector(':scope > .content'); const kid = c.children[0]; const t = kid && kid.querySelector(':scope > .txt:not(.txts)'); const r = p.getBoundingClientRect(); const kr = kid && kid.getBoundingClientRect(); return { pill: Math.round(r.width) + 'x' + Math.round(r.height), pillCss: p.style.cssText.slice(0, 200), contentCss: c.style.cssText.slice(0, 120), kidBox: kr && (Math.round(kr.width) + 'x' + Math.round(kr.height)), kidCss: kid && kid.style.cssText.slice(0, 200), text: t && t.textContent, txtCss: t && t.style.cssText.slice(0, 160) } }))()" }
+]

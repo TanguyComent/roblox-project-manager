@@ -1,0 +1,9 @@
+[
+  { "move": [588, 316] },
+  { "wait": 150 },
+  { "down": [588, 316] },
+  { "eval": "(async () => { const el = [...document.querySelectorAll('#viewport .rbx')].find(e => e.dataset.cls === 'Frame' && e.dataset.corner === '0.2,0'); if (!el) return 'introuvable'; const vals = []; for (let i = 0; i < 16; i++) { const r = el.getBoundingClientRect(); vals.push(el.style.borderRadius + ' | scale=' + (r.width / el.offsetWidth).toFixed(3)); await new Promise(r => setTimeout(r, 25)) } return vals })()" },
+  { "up": [588, 316] },
+  { "wait": 400 },
+  { "eval": "(() => { const el = [...document.querySelectorAll('#viewport .rbx')].find(e => e.dataset.cls === 'Frame' && e.dataset.corner === '0.2,0'); return el ? el.style.borderRadius + ' | transform=' + el.style.transform : 'introuvable' })()" }
+]

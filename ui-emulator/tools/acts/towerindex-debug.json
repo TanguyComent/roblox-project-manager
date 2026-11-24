@@ -1,0 +1,3 @@
+[
+  { "eval": "(() => { const els = [...document.querySelectorAll('#viewport .rbx')].filter(e => e.dataset.cls === 'ScrollingFrame'); return els.map(s => { const c = s.querySelector(':scope > .content'); return { w: s.clientWidth, h: s.clientHeight, scrollH: s.scrollHeight, ov: getComputedStyle(s).overflowY, contentH: c.offsetHeight, contentW: c.offsetWidth, contentCss: c.style.cssText.slice(0, 220), kids: c.children.length, firstKid: c.children[0] && c.children[0].style.cssText.slice(0, 160) } }) })()" }
+]

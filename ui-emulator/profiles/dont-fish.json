@@ -1,0 +1,9 @@
+{
+  "project": "C:/Users/tangu/Documents/ROBLOX/Code/boilr/dont-fish-at-night",
+  "tsconfig": "tsconfig.json",
+  "storiesRoots": [{ "dir": "src/client/UI/gui" }],
+  "ignore": [],
+  "viewport": "UI Labs",
+  "background": "dots",
+  "overrides": { "src/client/UI/hooks/usePx.ts": "project/usePx.ts" }
+}

@@ -147,3 +147,8 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# ui-emulator : captures et rapports générés par tools/cdp.mjs
+ui-emulator/shots*/
+ui-emulator/*-run.txt
+ui-emulator/report.json

@@ -1,0 +1,9 @@
+[
+  { "move": [872, 262] },
+  { "wait": 200 },
+  { "down": [872, 262] },
+  { "wait": 350 },
+  { "shot": "shots-tower/_pressed_hud.png" },
+  { "up": [872, 262] },
+  { "wait": 300 }
+]

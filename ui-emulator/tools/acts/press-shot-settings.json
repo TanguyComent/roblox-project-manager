@@ -1,0 +1,9 @@
+[
+  { "move": [588, 316] },
+  { "wait": 200 },
+  { "down": [588, 316] },
+  { "wait": 350 },
+  { "shot": "shots-tower/_pressed_settings.png" },
+  { "up": [588, 316] },
+  { "wait": 300 }
+]

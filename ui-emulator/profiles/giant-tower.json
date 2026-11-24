@@ -1,0 +1,12 @@
+{
+  "project": "C:/Users/tangu/Documents/ROBLOX/Code/perso/my-giant-tower",
+  "tsconfig": "places/game/tsconfig.json",
+  "storiesRoots": [
+    { "dir": "places/game/src/client/interfaces", "label": "game" },
+    { "dir": "places/common/src/client/interfaces", "label": "common" }
+  ],
+  "ignore": ["PLACE_NAME"],
+  "viewport": "UI Labs",
+  "background": "dots",
+  "overrides": {}
+}
