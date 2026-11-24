@@ -6,6 +6,19 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// `.env` du dossier de l'outil (EMU_URL, EDGE, EMU_DPR...). Une variable deja definie dans l'environnement reste prioritaire.
+try {
+  const envFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env')
+  if (fs.existsSync(envFile)) {
+    for (const raw of fs.readFileSync(envFile, 'utf8').replace(/^﻿/, '').split(/\r?\n/)) {
+      if (raw.trim().startsWith('#')) continue
+      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(raw)
+      if (m && process.env[m[1]] === undefined) process.env[m[1]] = /^(['"]).*\1$/.test(m[2]) ? m[2].slice(1, -1) : m[2]
+    }
+  }
+} catch { /* .env illisible : on continue avec l'environnement */ }
 
 const EDGE = process.env.EDGE ?? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const BASE = process.env.EMU_URL ?? 'http://127.0.0.1:5174'

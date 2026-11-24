@@ -2,6 +2,7 @@ import { Signal } from './signal'
 import { createInstance } from './instance'
 import { TweenServiceImpl } from './tween'
 import { Vector2 } from './datatypes'
+import { stub } from './stub'
 
 // Tout acces non implemente est enregistre : c'est le rapport "doublures manquantes".
 export const MISSING = new Set<string>()
@@ -13,6 +14,7 @@ export function ghost(path: string): any {
     get(_t, p) {
       if (p === 'Connect' || p === 'Once') return () => ({ Connected: true, Disconnect() {} })
       if (p === 'Wait') return () => []
+      if (p === 'WaitForChild') return (name: string) => stub(`${path}.${name}`) // jamais nil dans Roblox : on tolere (3D, paquets...)
       if (p === Symbol.toPrimitive) return () => 0
       if (p === 'then' || typeof p === 'symbol') return undefined
       record(`${path}.${p}`)
@@ -28,6 +30,7 @@ function withGhost<T extends object>(obj: T, path: string): T {
     get(t, p) {
       if (typeof p === 'symbol' || p in t) return (t as any)[p]
       if (p === 'then') return undefined
+      if (p === 'WaitForChild') return (name: string) => stub(`${path}.${name}`)
       return ghost(`${path}.${String(p)}`)
     },
     set(t, p, v) { (t as any)[p] = v; return true },
@@ -98,7 +101,7 @@ export const UserInputService = withGhost(
 )
 
 export const Workspace = withGhost(
-  { CurrentCamera: camera, Name: 'Workspace', Gravity: 196.2, GetServerTimeNow: () => Date.now() / 1000, FindFirstChild: () => undefined, WaitForChild: () => undefined, GetPropertyChangedSignal: () => new Signal() },
+  { CurrentCamera: camera, Name: 'Workspace', Gravity: 196.2, GetServerTimeNow: () => Date.now() / 1000, FindFirstChild: () => undefined, WaitForChild: (name: string) => stub(`Workspace.${name}`), GetPropertyChangedSignal: () => new Signal() },
   'Workspace',
 )
 

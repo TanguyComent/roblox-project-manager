@@ -18,10 +18,11 @@ export function atom<T>(initial: T): any {
       return state
     }
     const next = typeof args[0] === 'function' ? args[0](state) : args[0]
-    if (next === state) return
+    if (next === state) return state
     const prev = state
     state = next
     for (const s of [...subs]) s(state, prev)
+    return state
   }
   a.__subs = subs
   a.__peek = () => state

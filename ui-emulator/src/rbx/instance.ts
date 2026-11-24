@@ -1,4 +1,5 @@
 import { Signal } from './signal'
+import { stub } from './stub'
 import { Enum } from './enums'
 import { UDim, UDim2, Vector2, Vector3, CFrame, Color3, Rect, ColorSequence, NumberSequence, Font, valueEquals } from './datatypes'
 
@@ -222,14 +223,9 @@ export class RbxInstance {
   FindFirstAncestor(name: string) { let p = this._parent; while (p) { if (p.Name === name) return p; p = p.Parent } return undefined }
   FindFirstAncestorOfClass(cls: string) { let p = this._parent; while (p) { if (p.ClassName === cls) return p; p = p.Parent } return undefined }
   FindFirstAncestorWhichIsA(cls: string) { let p = this._parent; while (p) { if (p.IsA(cls)) return p; p = p.Parent } return undefined }
-  // Dans l'emulateur les paquets du jeu n'existent pas : on cree un conteneur vide plutot que de renvoyer undefined.
+  // Roblox : WaitForChild ne renvoie jamais nil. Les enfants absents (3D, paquets) sont ignores via un objet tolerant.
   WaitForChild(name: string) {
-    const existing = this.FindFirstChild(name)
-    if (existing) return existing
-    const f = createInstance('Folder')
-    f.Name = name
-    f.Parent = this._self
-    return f
+    return this.FindFirstChild(name) ?? stub(`${this.Name}.${name}`)
   }
   IsDescendantOf(a: any) { let p = this._parent; while (p) { if (p === a) return true; p = p.Parent } return false }
   IsAncestorOf(d: any) { return d.IsDescendantOf(this._self) }

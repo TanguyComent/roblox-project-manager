@@ -5,6 +5,20 @@ import fs from 'node:fs'
 import ts from 'typescript'
 
 const HERE = path.posix.normalize(fileURLToPath(new URL('.', import.meta.url)).replace(/\\/g, '/')).replace(/\/$/, '')
+// Fichier `.env` du dossier de l'outil (RBX_PROFILE, RBX_PROJECT...). Vite ne le charge PAS dans process.env pour sa propre
+// configuration : on le lit ici. Une variable deja definie dans l'environnement reste prioritaire.
+function loadDotEnv(file: string) {
+  if (!fs.existsSync(file)) return
+  for (const raw of fs.readFileSync(file, 'utf8').replace(/^﻿/, '').split(/\r?\n/)) {
+    if (raw.trim().startsWith('#')) continue
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(raw)
+    if (!m) continue
+    const value = /^(['"]).*\1$/.test(m[2]) ? m[2].slice(1, -1) : m[2]
+    if (process.env[m[1]] === undefined) process.env[m[1]] = value
+  }
+}
+loadDotEnv(`${HERE}/.env`)
+
 // Un PROFIL decrit le projet Roblox a emuler (lu en lecture seule, jamais modifie) :
 //   RBX_PROFILE=dont-fish | giant-tower   (voir profiles/*.json)
 const PROFILE = process.env.RBX_PROFILE ?? 'dont-fish'

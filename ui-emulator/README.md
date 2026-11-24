@@ -34,6 +34,9 @@ $env:RBX_PROFILE = 'giant-tower'      # ou 'dont-fish'
 npx vite --host 127.0.0.1 --port 5175
 ```
 
+Les variables peuvent aussi venir d'un fichier **`ui-emulator/.env`** (ignoré par git, voir `.env.example`), lu par le serveur et par
+`tools/cdp.mjs`. Une variable déjà définie dans l'environnement reste prioritaire sur le `.env`.
+
 Puis ouvrir `http://127.0.0.1:5175/` (ou `?story=<nom>` pour une story précise). Après modification d'un profil, redémarrer le serveur.
 
 ## Captures et interactions automatiques

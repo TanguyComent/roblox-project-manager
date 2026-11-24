@@ -50,6 +50,17 @@ export class OnoeNum {
   greaterThanOrEquals(o: Num) { return this.ge(o) }
   greaterThanOrEqualTo(o: Num) { return this.ge(o) }
   equals(o: Num) { return this.eq(o) }
+  moreThan(o: Num) { return this.gt(o) }
+  moreEquals(o: Num) { return this.ge(o) }
+  moreThanOrEquals(o: Num) { return this.ge(o) }
+  lessEquals(o: Num) { return this.le(o) }
+  meeq(o: Num) { return this.ge(o) }
+  leeq(o: Num) { return this.le(o) }
+  me(o: Num) { return this.gt(o) }
+  le_(o: Num) { return this.le(o) }
+  log10() { return new OnoeNum(Math.log10(this.value)) }
+  sqrt() { return new OnoeNum(Math.sqrt(this.value)) }
+  clone() { return new OnoeNum(this.value) }
   isZero() { return this.value === 0 }
   toNumber() { return this.value }
   toSuffix(decimals = 2) {

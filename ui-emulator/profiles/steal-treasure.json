@@ -1,0 +1,7 @@
+{
+  "project": "C:/Users/tangu/Documents/ROBLOX/Code/boilr/steal-treasure",
+  "tsconfig": "tsconfig.json",
+  "storiesRoots": [{ "dir": "src" }],
+  "viewport": "UI Labs",
+  "background": "dots"
+}
