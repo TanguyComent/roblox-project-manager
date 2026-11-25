@@ -160,7 +160,12 @@ export interface RobloxCardData {
     invalid: boolean; invalidDetail: string | null
     permissions: string[]; canPublish: boolean
     expiresAt: number | null; expiresSoon: boolean; checkedAt: number
-    groups: { id: string; name: string | null }[] | null
+    /** Groupes ou le role du compte permet de gerer les experiences (ou dont on ne peut pas savoir). null : liste indisponible. */
+    groups: { id: string; name: string | null; role: string | null }[] | null
+    /** Groupes dont le compte est membre sans pouvoir y gerer d'experiences (masques par defaut). */
+    otherGroups: { id: string; name: string | null }[]
+    /** Les permissions des roles ne sont pas lisibles avec cette cle (permission group:read manquante). */
+    rolesUnreadable: boolean
     projects: string[]
   }[]
   error?: string
@@ -181,8 +186,10 @@ function robloxCard(r: RobloxCardData, csrf: string) {
         ${!a.invalid && !a.canPublish ? '<span class="muted small">Cette cle n\'a pas la permission de publier des places (<code>universe-places:write</code>) : utile plus tard.</span>' : ''}
         ${a.permissions.length ? `<span class="muted small">Permissions : ${a.permissions.map((p) => `<code>${esc(p)}</code>`).join(' ')}</span>` : ''}
         ${a.groups === null ? '' : a.groups.length
-          ? `<span class="muted small">Groupes : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
-          : '<span class="muted small">Aucun groupe.</span>'}
+          ? `<span class="muted small">Groupes ou gerer des experiences : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')}${g.role ? ` (${esc(g.role)})` : ''} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
+          : '<span class="muted small">Aucun groupe ou ce compte peut gerer des experiences.</span>'}
+        ${a.rolesUnreadable ? '<span class="muted small">Les permissions des roles ne sont pas lisibles avec cette cle : ajoute-lui la permission <code>group:read</code> pour ne voir que les groupes utiles.</span>' : ''}
+        ${a.otherGroups.length ? `<details class="others"><summary>${a.otherGroups.length} autre${a.otherGroups.length > 1 ? 's' : ''} groupe${a.otherGroups.length > 1 ? 's' : ''} (role sans permission de gestion)</summary><span class="muted small">${a.otherGroups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span></details>` : ''}
         ${a.projects.length ? `<span class="muted small">Utilise par : ${a.projects.map(esc).join(', ')}</span>` : ''}
         <details class="change"><summary>Changer la cle</summary>
           <form method="post" action="/account/roblox/${a.id}/key" autocomplete="off">${csrfField(csrf)}
@@ -219,7 +226,7 @@ function robloxCard(r: RobloxCardData, csrf: string) {
       <ol class="how">
         <li>Ouvre le <a href="https://create.roblox.com/dashboard/credentials" target="_blank" rel="noopener noreferrer">Creator Dashboard → Cles d'API</a> avec le compte concerne, puis <em>Create API Key</em>.</li>
         <li>Donne-lui un nom, puis ajoute les permissions voulues (« Access Permissions »), par exemple <code>universe-places</code> en ecriture pour publier. <strong>Laisse « Restrict by Experience » desactive</strong> : la cle couvre alors toutes tes experiences, <em>y compris celles que tu creeras plus tard</em>.</li>
-        <li>Pour un groupe : la cle s'obtient avec un compte membre du groupe (idealement un compte dedie) ; elle couvre les experiences du groupe selon son role.</li>
+        <li>Pour un groupe : la cle s'obtient avec un compte membre du groupe (idealement un compte dedie) ; elle couvre les experiences du groupe selon son role. Ajoute-lui la permission <code>group:read</code> : le site peut alors ne proposer que les groupes ou ton role permet de <em>gerer les experiences</em>.</li>
         <li>Evite les restrictions d'adresse IP, et si tu fixes une expiration, pense a la renouveler (une cle inutilisee 60 jours expire aussi).</li>
         <li>Copie la cle : <strong>Roblox ne l'affiche qu'une seule fois</strong>.</li>
       </ol>

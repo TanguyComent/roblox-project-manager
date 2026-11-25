@@ -155,9 +155,14 @@ export function deleteAccount(db: Db, userId: number, id: number): boolean {
 }
 
 // --- groupes -----------------------------------------------------------------------------------------------------------------------
-export interface AuthorizedGroup { id: string; name: string | null }
+/**
+ * Un groupe dont le proprietaire de la cle est membre. `canManage` : son role lui permet de gerer les experiences du groupe
+ * (`manageGroupUniverses`) ; `null` = impossible a savoir (la cle n'a pas la permission group:read, donc les permissions du role sont masquees).
+ */
+export interface AuthorizedGroup { id: string; name: string | null; role: string | null; canManage: boolean | null }
 const CACHE_MS = 5 * 60_000
 const MAX_GROUPS = 10
+const MAX_GROUPS_CHECKED = 60 // groupes dont on lit les roles (un compte peut avoir rejoint des dizaines de groupes)
 const caches = {
   groups: new Map<number, { at: number; value: AuthorizedGroup[] }>(),
   places: new Map<number, { at: number; value: KnownPlace[] }>(),
@@ -167,39 +172,67 @@ const caches = {
 // Vide tous les caches (les tests recreent des bases dont les numeros de compte repartent de 1).
 export function resetRobloxCaches() { caches.groups.clear(); caches.places.clear() }
 
-// Groupes dont le proprietaire de la cle est membre (avec leur nom). Leve RobloxError si la cle ne permet pas de le lire.
+/** Groupes ou l'on peut travailler : ceux ou le role permet de gerer les experiences, et ceux dont on ne peut pas savoir (benefice du doute). */
+export const manageableGroups = (groups: AuthorizedGroup[]) => groups.filter((g) => g.canManage !== false)
+
+// Groupes dont le proprietaire de la cle est membre, avec leur nom, son role et son droit de gerer les experiences.
+// Leve RobloxError si la cle ne permet pas de lire les appartenances.
 export async function listAuthorizedGroups(db: Db, client: RobloxClient, account: RobloxAccount, opts: { fresh?: boolean } = {}): Promise<AuthorizedGroup[]> {
   const cached = caches.groups.get(account.id)
   if (!opts.fresh && cached && now() - cached.at < CACHE_MS) return cached.value
   const key = usableKey(db, account)
   const memberships = await client.listMemberships(key, account.roblox_user_id)
-  const ids = [...new Set(memberships.map((m) => m.groupId))]
-  const groups = await Promise.all(ids.map(async (id) => {
+  const byGroup = new Map<string, Set<string>>()
+  for (const m of memberships) {
+    const roles = byGroup.get(m.groupId) ?? new Set<string>()
+    for (const r of m.roleIds) roles.add(r)
+    byGroup.set(m.groupId, roles)
+  }
+
+  const describe = async ([id, roleIds]: [string, Set<string>], index: number): Promise<AuthorizedGroup> => {
     const g = await client.getGroup(key, id)
-    return { id, name: g.kind === 'found' ? g.value.name : null }
-  }))
-  groups.sort((a, b) => (a.name ?? '~').localeCompare(b.name ?? '~'))
+    const group: AuthorizedGroup = { id, name: g.kind === 'found' ? g.value.name : null, role: null, canManage: null }
+    if (index >= MAX_GROUPS_CHECKED) return group
+    const roles = await Promise.all([...roleIds].map((r) => client.getRole(key, id, r)))
+    const found = roles.flatMap((r) => (r.kind === 'found' ? [r.value] : []))
+    const top = [...found].sort((x, y) => (y.rank ?? -1) - (x.rank ?? -1))[0]
+    group.role = top?.name ?? null
+    const readable = found.filter((r) => r.permissions !== null)
+    // plusieurs roles : il suffit qu'un seul donne le droit
+    if (readable.length) group.canManage = readable.some((r) => r.permissions!.manageGroupUniverses === true)
+    return group
+  }
+  const groups: AuthorizedGroup[] = []
+  const entries = [...byGroup]
+  for (let i = 0; i < entries.length; i += 8) { // par paquets : un compte dans 80 groupes ne doit pas declencher 160 requetes d'un coup
+    groups.push(...await Promise.all(entries.slice(i, i + 8).map((e, j) => describe(e, i + j))))
+  }
+  groups.sort((x, y) => Number(y.canManage === true) - Number(x.canManage === true) || (x.name ?? '~').localeCompare(y.name ?? '~'))
   caches.groups.set(account.id, { at: now(), value: groups })
   return groups
 }
 
 export type GroupCheck = { ok: true; name: string | null; verified: boolean } | { ok: false; error: string; status: 400 | 502 }
 
-// Le groupe doit etre accessible avec la cle de ce compte : le proprietaire de la cle en est membre.
-// Si la cle n'a pas le droit de lire les appartenances, on ne peut pas trancher : le groupe est accepte « non verifie ».
+// Le groupe doit etre accessible avec la cle de ce compte : son proprietaire en est membre ET son role permet de gerer les experiences du groupe.
+// Si la cle n'a pas le droit de lire ces informations, on ne peut pas trancher : le groupe est accepte « non verifie ».
 export async function checkGroupAccess(db: Db, client: RobloxClient, account: RobloxAccount, groupId: number): Promise<GroupCheck> {
   let key: string
   try { key = usableKey(db, account) } catch (e) { return { ok: false, status: 400, error: (e as Error).message } }
   const group = await client.getGroup(key, String(groupId))
   if (group.kind === 'missing') return { ok: false, status: 400, error: `Le groupe ${groupId} n'existe pas.` }
   const name = group.kind === 'found' ? group.value.name : null
+  const label = name ? ` (« ${name} »)` : ''
   try {
-    const memberships = await client.listMemberships(key, account.roblox_user_id)
-    if (memberships.some((m) => m.groupId === String(groupId))) return { ok: true, name, verified: true }
-    return {
-      ok: false, status: 400,
-      error: `Le compte Roblox « ${account.label} » n'est pas membre du groupe ${groupId}${name ? ` (« ${name} »)` : ''} : sa cle ne peut donc pas y acceder. Ajoute ce compte au groupe, ou choisis un autre compte.`,
+    const groups = await listAuthorizedGroups(db, client, account, { fresh: true })
+    const found = groups.find((g) => g.id === String(groupId))
+    if (!found) {
+      return { ok: false, status: 400, error: `Le compte Roblox « ${account.label} » n'est pas membre du groupe ${groupId}${label} : sa cle ne peut donc pas y acceder. Ajoute ce compte au groupe, ou choisis un autre compte.` }
     }
+    if (found.canManage === false) {
+      return { ok: false, status: 400, error: `Le compte Roblox « ${account.label} » est membre du groupe ${groupId}${label} mais son role${found.role ? ` « ${found.role} »` : ''} ne permet pas de gerer les experiences du groupe. Choisis un compte qui en a le droit.` }
+    }
+    return { ok: true, name, verified: found.canManage === true }
   } catch (e) {
     if (e instanceof RobloxError && (e.status === 401 || e.status === 403)) return { ok: true, name, verified: false }
     return { ok: false, status: 502, error: `Impossible de verifier l'acces au groupe : ${e instanceof RobloxError ? e.message : 'Roblox ne repond pas'}.` }
@@ -225,8 +258,8 @@ export async function listKnownPlaces(db: Db, client: RobloxClient, account: Rob
     if (u.kind === 'found') add(id, u.value.name, u.value.rootPlaceId)
   }))
   for (const g of await client.listPublicGames('User', account.roblox_user_id)) add(g.universeId, g.name, g.rootPlaceId)
-  const groups = await listAuthorizedGroups(db, client, account).catch(() => [] as AuthorizedGroup[])
-  for (const grp of groups.slice(0, MAX_GROUPS)) for (const g of await client.listPublicGames('Group', grp.id)) add(g.universeId, g.name, g.rootPlaceId)
+  const groups = await listAuthorizedGroups(db, client, account, { fresh: opts.fresh }).catch(() => [] as AuthorizedGroup[])
+  for (const grp of manageableGroups(groups).slice(0, MAX_GROUPS)) for (const g of await client.listPublicGames('Group', grp.id)) add(g.universeId, g.name, g.rootPlaceId)
 
   const places: KnownPlace[] = []
   await Promise.all([...universes].map(async ([universeId, u]) => {

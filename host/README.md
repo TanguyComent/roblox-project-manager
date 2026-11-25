@@ -44,8 +44,10 @@ Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte �
 ## Projets
 
 Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : le proprietaire de la cle doit en
-etre membre, via `GET /cloud/v2/groups/-/memberships` ; le nom est rempli automatiquement ; si la cle n'a pas le droit de lire les appartenances, le groupe est
-accepte « non verifie » avec un avertissement), un **depot GitHub** et des **experiences** :
+etre membre (`GET /cloud/v2/groups/-/memberships`) **et son role doit permettre de gerer les experiences du groupe** (permission `manageGroupUniverses`,
+lue via `GET /cloud/v2/groups/{id}/roles/{role}` — il faut pour cela la permission `group:read` sur la cle) ; le nom est rempli automatiquement ; si la cle ne
+permet pas de le lire, le groupe est accepte « non verifie » avec un avertissement). Les groupes rejoints sans droit de gestion sont **ecartes** des listes
+(page Compte : repliés sous « N autres groupes » ; formulaire de projet et liste de places : absents), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 
 - **Places** : a la creation, la Release et la Dev se choisissent dans la liste des **places connues** du compte, ou par identifiants saisis a la main ;

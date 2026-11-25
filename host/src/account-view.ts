@@ -3,7 +3,7 @@ import type { Env } from './app.ts'
 import { remainingRecoveryCodes } from './auth.ts'
 import type { Db } from './db.ts'
 import { getConnection } from './github-connection.ts'
-import { EXPIRY_WARNING_MS, canPublish, listAccounts, listAuthorizedGroups, projectsUsingAccount, scopeLabels } from './roblox-accounts.ts'
+import { EXPIRY_WARNING_MS, canPublish, listAccounts, listAuthorizedGroups, manageableGroups, projectsUsingAccount, scopeLabels } from './roblox-accounts.ts'
 import type { RobloxClient } from './roblox.ts'
 import { accountPage } from './views.ts'
 
@@ -27,16 +27,21 @@ export async function renderAccount(
 ) {
   const c = getConnection(db, a.user.id)
   const now = Date.now()
-  const accounts = await Promise.all(listAccounts(db, a.user.id).map(async (acc) => ({
+  const accounts = await Promise.all(listAccounts(db, a.user.id).map(async (acc) => {
+    // groupes du compte : lecture « au mieux » (cache 5 min, 4 s maximum) pour ne jamais bloquer la page
+    const all = acc.status === 'ok' ? await withTimeout(listAuthorizedGroups(db, roblox, acc), 4000).catch(() => null) : null
+    const useful = all ? manageableGroups(all) : null
+    return {
     id: acc.id, label: acc.label, username: acc.username, robloxId: acc.roblox_user_id, keyName: acc.key_name,
     invalid: acc.status !== 'ok', invalidDetail: acc.status_detail,
     permissions: scopeLabels(acc.scopes), canPublish: canPublish(acc.scopes),
     expiresAt: acc.expires_at, expiresSoon: acc.expires_at !== null && acc.expires_at - now < EXPIRY_WARNING_MS && acc.expires_at > now,
     checkedAt: acc.checked_at,
     projects: projectsUsingAccount(db, acc.id),
-    // groupes du compte : lecture « au mieux » (cache 5 min, 4 s maximum) pour ne jamais bloquer la page
-    groups: acc.status === 'ok' ? await withTimeout(listAuthorizedGroups(db, roblox, acc), 4000).catch(() => null) : null,
-  })))
+    groups: useful?.map((g) => ({ id: g.id, name: g.name, role: g.role })) ?? null,
+    otherGroups: all && useful ? all.filter((g) => !useful.includes(g)).map((g) => ({ id: g.id, name: g.name })) : [],
+    rolesUnreadable: !!all && all.some((g) => g.canManage === null),
+  }}))
   return accountPage({
     email: a.user.email, csrf: a.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a.user.id), notice: extra.notice,
     roblox: { accounts, error: extra.robloxError, notice: ROBLOX_NOTICES[extra.robloxKey ?? ''] },

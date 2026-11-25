@@ -14,7 +14,9 @@ export interface KeyInfo {
 }
 export interface UniverseInfo { universeId: string; name: string; rootPlaceId: string | null; owner: { type: 'User' | 'Group'; id: string } | null }
 export interface PlaceInfo { placeId: string; name: string }
-export interface GroupMembership { groupId: string; roleId: string | null }
+export interface GroupMembership { groupId: string; /** Tous les roles du membre dans le groupe (un membre peut en cumuler plusieurs). */ roleIds: string[] }
+/** Un role de groupe ; `permissions` est null quand la cle n'a pas le droit de les lire (il faut alors la permission group:read). */
+export interface GroupRole { name: string; rank: number | null; permissions: Record<string, boolean> | null }
 
 /** Resultat d'une recherche qui peut etre « introuvable » ou « impossible a savoir » (cle sans la permission de lecture, panne...). */
 export type Lookup<T> = { kind: 'found'; value: T } | { kind: 'missing' } | { kind: 'unknown' }
@@ -32,6 +34,7 @@ export interface RobloxClient {
   getGroup(apiKey: string, groupId: string): Promise<Lookup<{ name: string }>>
   /** Groupes dont le compte est membre. Leve RobloxError si la cle n'a pas le droit de le lire. */
   listMemberships(apiKey: string, userId: string): Promise<GroupMembership[]>
+  getRole(apiKey: string, groupId: string, roleId: string): Promise<Lookup<GroupRole>>
   getUniverse(apiKey: string, universeId: string): Promise<Lookup<UniverseInfo>>
   /** Verifie qu'une place appartient bien a l'experience. */
   getPlace(apiKey: string, universeId: string, placeId: string): Promise<Lookup<PlaceInfo>>
@@ -107,15 +110,30 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
         const filter = encodeURIComponent(`user == 'users/${userId}'`)
         const res = await get(`${BASE}/cloud/v2/groups/-/memberships?maxPageSize=100&filter=${filter}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, apiKey)
         if (!res.ok) throw await failure(res)
-        const j = (await res.json()) as { groupMemberships?: { path?: string; role?: string }[]; nextPageToken?: string }
+        const j = (await res.json()) as { groupMemberships?: { path?: string; role?: string; roles?: string[] }[]; nextPageToken?: string }
         for (const m of j.groupMemberships ?? []) {
           const g = /groups\/(\d+)/.exec(m.path ?? '')?.[1]
-          if (g) out.push({ groupId: g, roleId: /roles\/(\d+)/.exec(m.role ?? '')?.[1] ?? null })
+          const roleIds = [...new Set([...(m.roles ?? []), ...(m.role ? [m.role] : [])].map((r) => /roles\/(\d+)/.exec(r)?.[1]).filter((x): x is string => !!x))]
+          if (g) out.push({ groupId: g, roleIds })
         }
         if (!j.nextPageToken) break
         pageToken = j.nextPageToken
       }
       return out
+    },
+
+    // Role d'un groupe : ses permissions ne sont visibles que si la cle a la permission group:read (et que son proprietaire a ce role).
+    async getRole(apiKey, groupId, roleId) {
+      if (!/^\d+$/.test(groupId) || !/^\d+$/.test(roleId)) return { kind: 'missing' }
+      try {
+        const res = await get(`${BASE}/cloud/v2/groups/${groupId}/roles/${roleId}`, apiKey)
+        if (res.status === 404) return { kind: 'missing' }
+        if (!res.ok) return { kind: 'unknown' }
+        const j = (await res.json()) as { displayName?: string; rank?: number; permissions?: Record<string, unknown> }
+        const permissions = j.permissions && typeof j.permissions === 'object'
+          ? Object.fromEntries(Object.entries(j.permissions).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> : null
+        return { kind: 'found', value: { name: j.displayName ?? `Role ${roleId}`, rank: typeof j.rank === 'number' ? j.rank : null, permissions } }
+      } catch { return { kind: 'unknown' } }
     },
 
     async getUniverse(apiKey, universeId) {

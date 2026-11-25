@@ -48,8 +48,11 @@ test('connexion : la cle est verifiee, chiffree en base et jamais reaffichee', a
   assert.match(page, /@tanguy_dev/)
   assert.match(page, /Cle valide/)
   assert.match(page, /<code>universe-places:write<\/code>/)
-  assert.match(page, /Boilr <code>123456<\/code>/) // groupes dont le compte est membre
-  assert.match(page, /Studio <code>777<\/code>/)
+  // groupes : seuls ceux ou le role permet de gerer des experiences sont mis en avant, les autres sont repliés
+  assert.match(page, /Groupes ou gerer des experiences : Boilr \(Owner\) <code>123456<\/code><\/span>/)
+  assert.match(page, /2 autres groupes \(role sans permission de gestion\)/)
+  assert.match(page, /<details class="others">.*Studio <code>777<\/code>/s)
+  assert.doesNotMatch(page, /group:read<\/code> pour ne voir/) // les roles sont lisibles : pas de conseil
 })
 
 test('connexion : nom personnalise, plusieurs comptes, meme cle refusee deux fois', async () => {
@@ -61,7 +64,7 @@ test('connexion : nom personnalise, plusieurs comptes, meme cle refusee deux foi
   const page = (await c.call('GET', '/account')).text
   assert.match(page, /Compte principal/)
   assert.match(page, /alt_account/)
-  assert.match(page, /Autre groupe <code>888<\/code>/)
+  assert.match(page, /Autre groupe \(Dev\) <code>888<\/code>/)
   const dup = await connectRoblox(c, KEYS.tanguy)
   assert.equal(dup.res.status, 400)
   assert.match(dup.text, /deja connectee/)
@@ -211,13 +214,13 @@ test('un utilisateur ne voit ni ne modifie les comptes Roblox d\'un autre', asyn
 })
 
 // --- groupes ------------------------------------------------------------------------------------------------------------------------
-test('groupes du compte : membres uniquement, avec leur nom, mis en cache', async () => {
+test('groupes du compte : membres uniquement, avec leur role et leur droit de gerer les experiences, mis en cache', async () => {
   const { c, rb } = await setup()
   const { accountId } = await connectRoblox(c)
   const userId = (c.db.prepare('SELECT user_id FROM roblox_accounts').get() as { user_id: number }).user_id
   const account = getAccount(c.db, userId, accountId!)!
   const groups = await listAuthorizedGroups(c.db, rb.client, account)
-  assert.deepEqual(groups.map((g) => `${g.id}:${g.name}`), ['123456:Boilr', '777:Studio'])
+  assert.deepEqual(groups.map((g) => `${g.id}:${g.name}:${g.role}:${g.canManage}`), ['123456:Boilr:Owner:true', '999:Fan club:Fan:false', '777:Studio:Membre:false'])
   const n = rb.calls.length
   await listAuthorizedGroups(c.db, rb.client, account)
   assert.equal(rb.calls.length, n)
@@ -237,8 +240,28 @@ test('acces a un groupe : membre -> ok (nom rempli) ; non membre ou inexistant -
   assert.equal(missing.ok, false)
   assert.match((missing as { error: string }).error, /n'existe pas/)
 
+  // membre, mais son role ne permet pas de gerer les experiences du groupe
+  for (const id of [777, 999]) {
+    const r = await checkGroupAccess(c.db, rb.client, account, id)
+    assert.equal(r.ok, false, `groupe ${id}`)
+    assert.match((r as { error: string }).error, /ne permet pas de gerer les experiences du groupe/)
+  }
+
   rb.state.membershipsForbidden = true // la cle n'a pas le droit de lire les appartenances : on ne peut pas trancher
   assert.deepEqual(await checkGroupAccess(c.db, rb.client, account, 123456), { ok: true, name: 'Boilr', verified: false })
+})
+
+test('cle sans group:read : permissions des roles masquees -> groupes montres (benefice du doute) avec un conseil, acces « non verifie »', async () => {
+  const { c, rb } = await setup()
+  rb.state.hideRolePermissions = true
+  const { accountId } = await connectRoblox(c)
+  const userId = (c.db.prepare('SELECT user_id FROM roblox_accounts').get() as { user_id: number }).user_id
+  const account = getAccount(c.db, userId, accountId!)!
+  assert.deepEqual((await listAuthorizedGroups(c.db, rb.client, account)).map((g) => g.canManage), [null, null, null])
+  const page = (await c.call('GET', '/account')).text
+  assert.match(page, /Studio \(Membre\) <code>777<\/code>/)
+  assert.match(page, /ajoute-lui la permission <code>group:read<\/code>/)
+  assert.deepEqual(await checkGroupAccess(c.db, rb.client, account, 777), { ok: true, name: 'Studio', verified: false })
 })
 
 // --- projets : compte Roblox obligatoire, groupe verifie via la cle ---------------------------------------------------------------------
@@ -265,6 +288,8 @@ test('projet : le compte se choisit dans la liste, les comptes a cle invalide so
   assert.match(page, />Secondaire</)
   assert.match(page, /Groupes accessibles avec tes comptes/)
   assert.match(page, /Boilr <code>123456<\/code>/)
+  assert.doesNotMatch(page, /Studio <code>777<\/code>/) // role sans droit de gestion : non propose
+  assert.doesNotMatch(page, /Fan club/)
 
   assert.equal((await post(c, csrf, {})).res.status, 400) // pas de compte choisi
   const ok = await post(c, csrf, { robloxAccountId: String(b.accountId) })
@@ -306,6 +331,9 @@ test('projet : le groupe doit etre un groupe dont le compte est membre', async (
   assert.match(no.text, /n(?:'|&#39;)est pas membre du groupe 888/)
   assert.equal((await post(c, csrf, { robloxAccountId: String(b.accountId), groupId: '888' })).res.status, 303) // le bon compte
   assert.equal((await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '999999' })).res.status, 400)
+  const noRight = await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '777' }) // membre, mais role sans droit de gestion
+  assert.equal(noRight.res.status, 400)
+  assert.match(noRight.text, /role « Membre » ne permet pas de gerer les experiences/)
   assert.equal(projectCount(c), 2)
 })
 
@@ -341,9 +369,9 @@ test('projet : modifier le compte ou le groupe revalide l\'acces', async () => {
   const { c, csrf } = await setup()
   const a = await connectRoblox(c, KEYS.tanguy)
   const b = await connectRoblox(c, KEYS.alt)
-  const id = Number(/\/projects\/(\d+)/.exec((await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '777' })).res.headers.get('location')!)![1])
+  const id = Number(/\/projects\/(\d+)/.exec((await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '123456' })).res.headers.get('location')!)![1])
 
-  const bad = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure', robloxAccountId: String(b.accountId), groupId: '777' })
+  const bad = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure', robloxAccountId: String(b.accountId), groupId: '123456' })
   assert.equal(bad.res.status, 400)
   assert.match(bad.text, /alt key/)
   assert.equal((c.db.prepare('SELECT roblox_account_id AS a FROM projects WHERE id = ?').get(id) as { a: number }).a, a.accountId)

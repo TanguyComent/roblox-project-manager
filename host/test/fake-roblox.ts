@@ -11,7 +11,9 @@ export interface FakeKey {
   expired?: boolean
   expirationTimeUtc?: string | null
 }
-export interface FakeUser { id: string; username: string; groups: { id: string; name: string }[] }
+/** `manage` : le role du membre dans ce groupe permet de gerer les experiences (permission manageGroupUniverses). */
+export interface FakeGroup { id: string; name: string; role: string; manage: boolean }
+export interface FakeUser { id: string; username: string; groups: FakeGroup[] }
 
 export const KEYS = {
   tanguy: 'rbx-key-tanguy-AAAAAAAAAAAAAAAAAAAA',
@@ -28,10 +30,15 @@ const UNIVERSES: FakeUniverse[] = [
   { id: '5550001', name: 'Boilr Hub', owner: { type: 'Group', id: '123456' }, public: true, rootPlaceId: '6660001',
     places: [{ id: '6660001', name: 'Hub' }, { id: '6660002', name: 'Hub - arene' }] },
   { id: '7770001', name: 'Jeu de alt', owner: { type: 'User', id: '1002' }, public: true, rootPlaceId: '7770002', places: [{ id: '7770002', name: 'Alt' }] },
+  { id: '8880001', name: 'Fan Hub', owner: { type: 'Group', id: '999' }, public: true, rootPlaceId: '8880002', places: [{ id: '8880002', name: 'Fan' }] },
 ]
 const USERS: FakeUser[] = [
-  { id: '1001', username: 'tanguy_dev', groups: [{ id: '123456', name: 'Boilr' }, { id: '777', name: 'Studio' }] },
-  { id: '1002', username: 'alt_account', groups: [{ id: '888', name: 'Autre groupe' }] },
+  { id: '1001', username: 'tanguy_dev', groups: [
+    { id: '123456', name: 'Boilr', role: 'Owner', manage: true },
+    { id: '777', name: 'Studio', role: 'Membre', manage: false }, // membre sans droit de gestion
+    { id: '999', name: 'Fan club', role: 'Fan', manage: false },
+  ] },
+  { id: '1002', username: 'alt_account', groups: [{ id: '888', name: 'Autre groupe', role: 'Dev', manage: true }] },
 ]
 const PUBLISH = { name: 'universe-places', operations: ['write'] }
 const KEY_LIST: FakeKey[] = [
@@ -46,7 +53,7 @@ const KEY_LIST: FakeKey[] = [
 export function fakeRoblox() {
   const keys = new Map(KEY_LIST.map((k) => [k.key, { ...k }]))
   const calls: { method: string; host: string; path: string; search: string; key?: string }[] = []
-  const state = { introspectStatus: 200, membershipsForbidden: false, universeForbidden: false }
+  const state = { introspectStatus: 200, membershipsForbidden: false, universeForbidden: false, /** cle sans group:read : les permissions des roles sont masquees */ hideRolePermissions: false }
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
   const user = (id: string) => USERS.find((u) => u.id === id)
   const canAccess = (userId: string, u: FakeUniverse) =>
@@ -98,7 +105,13 @@ export function fakeRoblox() {
       if (state.membershipsForbidden) return json({ message: 'forbidden' }, 403)
       const uid = /users\/(\d+)/.exec(u.searchParams.get('filter') ?? '')?.[1]
       const usr = uid ? user(uid) : undefined
-      return json({ groupMemberships: (usr?.groups ?? []).map((g) => ({ path: `groups/${g.id}/memberships/${uid}`, role: `groups/${g.id}/roles/1` })) })
+      return json({ groupMemberships: (usr?.groups ?? []).map((g) => ({ path: `groups/${g.id}/memberships/${uid}`, role: `groups/${g.id}/roles/${g.id}00`, roles: [`groups/${g.id}/roles/${g.id}00`] })) })
+    }
+    m = /^\/cloud\/v2\/groups\/(\d+)\/roles\/(\d+)$/.exec(u.pathname)
+    if (m) {
+      const g = user(k!.userId)?.groups.find((x) => x.id === m![1])
+      if (!g || m[2] !== `${g.id}00`) return json({ message: 'not found' }, 404)
+      return json({ path: `groups/${g.id}/roles/${m[2]}`, id: m[2], displayName: g.role, rank: g.manage ? 255 : 1, ...(state.hideRolePermissions ? {} : { permissions: { manageGroupUniverses: g.manage, viewWallPosts: true } }) })
     }
     m = /^\/cloud\/v2\/universes\/(\d+)$/.exec(u.pathname)
     if (m) {

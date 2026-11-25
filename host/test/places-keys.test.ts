@@ -38,6 +38,14 @@ test('places connues : experiences publiques des groupes du compte (les privees 
   assert.ok(rb.calls.length > n, 'relecture forcee')
 })
 
+test('places connues : les groupes sans droit de gestion sont ecartes (benefice du doute si les roles sont illisibles)', async () => {
+  const { c, rb, account } = await setup()
+  const ids = (places: Awaited<ReturnType<typeof listKnownPlaces>>) => [...new Set(places.map((p) => p.universeName))]
+  assert.deepEqual(ids(await listKnownPlaces(c.db, rb.client, account())), ['Boilr Hub']) // « Fan Hub » (groupe Fan club) en est absent
+  rb.state.hideRolePermissions = true
+  assert.deepEqual(ids(await listKnownPlaces(c.db, rb.client, account(), { fresh: true })).sort(), ['Boilr Hub', 'Fan Hub'])
+})
+
 test('places connues : une cle limitee a une experience la nomme, meme privee', async () => {
   const { c, rb, account } = await setup(KEYS.tanguy2)
   assert.deepEqual(brief(await listKnownPlaces(c.db, rb.client, account())), [

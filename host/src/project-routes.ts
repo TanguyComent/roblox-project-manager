@@ -9,7 +9,7 @@ import {
   slugify, updateExperiencePlace, updateProject, type ExperienceKind, type Project,
 } from './projects.ts'
 import { resolvePlace } from './place-choice.ts'
-import { checkGroupAccess, getAccount, listAccounts, listAuthorizedGroups, listKnownPlaces, type RobloxAccount } from './roblox-accounts.ts'
+import { checkGroupAccess, getAccount, listAccounts, listAuthorizedGroups, listKnownPlaces, manageableGroups, type RobloxAccount } from './roblox-accounts.ts'
 import type { RobloxClient } from './roblox.ts'
 import { messagePage } from './views.ts'
 
@@ -70,7 +70,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const timeout = <T,>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000).unref())])
     return Promise.all(accounts.map(async (acc) => ({
       id: acc.id, label: acc.label, invalid: acc.status !== 'ok',
-      groups: acc.status === 'ok' ? await timeout(listAuthorizedGroups(db, roblox, acc)).catch(() => null) : null,
+      groups: acc.status === 'ok' ? await timeout(listAuthorizedGroups(db, roblox, acc).then(manageableGroups)).catch(() => null) : null,
     })))
   }
 

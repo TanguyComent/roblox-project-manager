@@ -9,7 +9,7 @@ import { connectRoblox } from './roblox-helpers.ts'
 
 type Client = ReturnType<typeof client>
 
-// Utilisateur connecte, avec un compte Roblox deja connecte (faux Roblox : groupes 123456 et 777 autorises).
+// Utilisateur connecte, avec un compte Roblox deja connecte (faux Roblox : groupe 123456 ou le role permet de gerer les experiences).
 async function loggedIn(opts: Parameters<typeof client>[0] = {}) {
   const rb = fakeRoblox()
   const c = client({ roblox: rb.client, ...opts })
@@ -167,10 +167,10 @@ test('modification d\'un projet', async () => {
   const { c, csrf } = await loggedIn()
   const id = projectIdFrom((await newProject(c, csrf)).res)
   const accountId = String((c.db.prepare('SELECT id FROM roblox_accounts').get() as { id: number }).id)
-  const r = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure 2', robloxAccountId: accountId, groupId: '777', groupName: 'Studio', repo: 'acme/st2' })
+  const r = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure 2', robloxAccountId: accountId, groupId: '123456', groupName: 'Boilr', repo: 'acme/st2' })
   assert.equal(r.res.status, 303)
   const row = c.db.prepare('SELECT name, slug, roblox_group_id, github_repo FROM projects WHERE id = ?').get(id) as Record<string, unknown>
-  assert.deepEqual({ ...row }, { name: 'Steal Treasure 2', slug: 'steal-treasure', roblox_group_id: 777, github_repo: 'acme/st2' })
+  assert.deepEqual({ ...row }, { name: 'Steal Treasure 2', slug: 'steal-treasure', roblox_group_id: 123456, github_repo: 'acme/st2' })
   assert.equal((await c.call('POST', `/projects/${id}`, { csrf, name: 'X', robloxAccountId: accountId, groupId: 'zz' })).res.status, 400)
 })
 
