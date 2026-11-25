@@ -18,6 +18,8 @@ import { githubRoutes } from './github-routes.ts'
 import { createGithubClient, type GithubFactory } from './github.ts'
 import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
+import { settingsRoutes } from './settings-routes.ts'
+import { robloxCredentials } from './settings.ts'
 import { projectRoutes } from './project-routes.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
@@ -27,7 +29,7 @@ const CSS_PATH = join(import.meta.dirname, '..', 'public', 'app.css')
 export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
 // opts.githubFor : fabrique de client GitHub a partir du jeton d'un utilisateur (remplacable dans les tests).
-export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: RobloxClient } = {}) {
+export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: RobloxClient; robloxFetch?: typeof fetch } = {}) {
   const app = new Hono<Env>()
   // Tentatives de connexion : par adresse IP (large) et par e-mail (strict, uniquement les echecs).
   const ipLimit = new RateLimiter(30, 15 * 60_000)
@@ -125,7 +127,8 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))
 
-  const roblox = opts.roblox ?? createRobloxClient()
+  // identifiants de l'application OAuth : lus en base (page Reglages) a chaque appel, avec le .env en secours
+  const roblox = opts.roblox ?? createRobloxClient({ credentials: () => robloxCredentials(db), fetchImpl: opts.robloxFetch })
   app.get('/account', async (c) => {
     const a = auth(c)
     const redirect = home(c)
@@ -145,6 +148,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   }
   githubRoutes(app, shared)
   robloxRoutes(app, shared)
+  settingsRoutes(app, shared)
   projectRoutes(app, shared)
 
   // Connexion --------------------------------------------------------------------------------------------------------------------

@@ -78,7 +78,7 @@ test('deconnexion : le cookie cesse de fonctionner, CSRF exige', async () => {
 
 test('connexion avec mot de passe + code A2F, le rejeu d\'un code est refuse', async () => {
   const c = client()
-  const { password, email } = await registerAndEnable(c)
+  const { password, email, step: used } = await registerAndEnable(c)
   const home = await c.call('GET', '/account')
   await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
 
@@ -92,9 +92,9 @@ test('connexion avec mot de passe + code A2F, le rejeu d\'un code est refuse', a
   assert.equal((await c.call('GET', '/')).res.headers.get('location'), '/login/2fa')
   const page = await c.call('GET', '/login/2fa')
   // le code du pas actuel a deja servi a l'activation : refuse (rejeu)
-  const replay = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: totpAt(secretOf(c.db), step()) })
+  const replay = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: totpAt(secretOf(c.db), used) })
   assert.equal(replay.res.status, 401)
-  const good = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: totpAt(secretOf(c.db), step() + 1) })
+  const good = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: totpAt(secretOf(c.db), used + 1) })
   assert.equal(good.res.status, 302)
   assert.equal(good.res.headers.get('location'), '/')
   assert.equal((await c.call('GET', '/account')).res.status, 200)

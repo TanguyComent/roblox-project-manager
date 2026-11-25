@@ -137,15 +137,15 @@ ${brand}
 </section>`, { wide: true })
 }
 
-export interface Viewer { email: string; csrf: string }
+export interface Viewer { email: string; csrf: string; admin?: boolean }
 
 // Page d'une session complete : barre de navigation commune (Projets, Compte) + deconnexion.
-export function appPage(title: string, v: Viewer, active: 'projects' | 'account', body: string) {
+export function appPage(title: string, v: Viewer, active: 'projects' | 'account' | 'settings', body: string) {
   const link = (href: string, label: string, key: string) => `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ''}>${label}</a>`
   return layout(title, `
 <header class="topbar">
   <a class="brand-link" href="/">${brand}</a>
-  <nav class="nav">${link('/projects', 'Projets', 'projects')}${link('/account', 'Compte', 'account')}</nav>
+  <nav class="nav">${link('/projects', 'Projets', 'projects')}${link('/account', 'Compte', 'account')}${v.admin ? link('/settings', 'Reglages', 'settings') : ''}</nav>
   <div class="who">
     <span class="muted">${esc(v.email)}</span>
     <form method="post" action="/logout" class="inline">${csrfField(v.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
@@ -157,8 +157,8 @@ ${body}`, { wide: true })
 export interface RobloxCardData {
   /** false : l'application OAuth de l'instance n'est pas configuree. */
   enabled: boolean
-  redirectUri: string
-  scopes: string
+  /** true : l'utilisateur est l'administrateur et peut la configurer (page Reglages). */
+  canConfigure: boolean
   accounts: { id: number; username: string; displayName: string | null; robloxId: string; needsReauth: boolean; groups: { id: string; name: string | null }[] | null; projects: string[] }[]
   error?: string
   notice?: string
@@ -167,10 +167,8 @@ export interface RobloxCardData {
 function robloxCard(r: RobloxCardData, csrf: string) {
   const setup = !r.enabled ? `
   <div class="alert error" role="note">
-    La connexion Roblox n'est pas configuree sur cette instance. Cree une application OAuth 2.0 sur
-    <a href="https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab" target="_blank" rel="noopener noreferrer">create.roblox.com</a>,
-    ajoute l'adresse de redirection <code>${esc(r.redirectUri)}</code> et les portees <code>${esc(r.scopes)}</code>, puis renseigne
-    <code>ROBLOX_CLIENT_ID</code> et <code>ROBLOX_CLIENT_SECRET</code> dans <code>host/.env</code> et redemarre le Host.
+    La connexion Roblox n'est pas encore configuree sur cette instance.
+    ${r.canConfigure ? '<a href="/settings">Configure-la dans les Reglages</a> (une application OAuth Roblox, a creer une seule fois).' : 'Demande a l\'administrateur de la configurer.'}
   </div>` : ''
   const rows = r.accounts.map((a) => `
     <li class="exp acct">

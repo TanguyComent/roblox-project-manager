@@ -27,10 +27,13 @@ Node 24+ (TypeScript execute directement, base SQLite integree `node:sqlite`). C
 Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte → Comptes Roblox* (OAuth 2.0 / Open Cloud, code d'autorisation + PKCE).
 Roblox demande de choisir le compte, puis les experiences et **groupes** que ce compte autorise.
 
-- **Configuration de l'instance** (une fois) : creer une application OAuth sur <https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab>
-  (compte verifie par piece d'identite), y declarer l'adresse de redirection `<PUBLIC_URL>/account/roblox/callback` (`http://localhost:3000/...` est
-  accepte pour les tests) et les portees, puis renseigner `ROBLOX_CLIENT_ID`, `ROBLOX_CLIENT_SECRET` (et `ROBLOX_OAUTH_SCOPES`, par defaut
-  `openid profile group:read universe-places:write`) dans `host/.env`. Une application en mode « prive » est limitee a 10 utilisateurs par Roblox.
+- **Configuration de l'instance** (une fois, par l'administrateur = le premier compte) : page **Reglages** du site. Elle explique comment creer
+  l'application OAuth sur <https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab> (compte verifie par piece d'identite), affiche
+  l'adresse de redirection a declarer (`<PUBLIC_URL>/account/roblox/callback` ; `http://localhost:3000/...` est accepte pour les tests) et les
+  permissions, puis on y colle le Client ID et le secret. Ils sont **chiffres en base** (le secret n'est jamais reaffiche), pris en compte
+  immediatement (sans redemarrage) et un bouton les **verifie** aupres de Roblox. Les variables `ROBLOX_CLIENT_ID`, `ROBLOX_CLIENT_SECRET` et
+  `ROBLOX_OAUTH_SCOPES` du `.env` restent possibles en solution de secours (la base a priorite). Une application en mode « prive » est limitee a
+  10 utilisateurs par Roblox.
 - **Jetons** : le jeton d'acces (15 min) et le jeton de rafraichissement (90 jours, **a usage unique**, renouvele a chaque rafraichissement) sont
   chiffres en base, jamais affiches. Les rafraichissements simultanes d'un meme compte sont fusionnes ; si Roblox refuse (autorisation revoquee ou
   expiree), le compte passe en « a reconnecter ».

@@ -30,8 +30,9 @@ export const step = () => Math.floor(Date.now() / 1000 / TOTP_STEP)
 export async function registerAndEnable(c: ReturnType<typeof client>, email = 'me@example.com', password = 'correct horse battery') {
   await c.call('POST', '/register', { email, password, confirm: password })
   const setup = await c.call('GET', '/2fa/setup')
-  const done = await c.call('POST', '/2fa/setup', { csrf: csrfOf(setup.text), code: totpAt(secretOf(c.db), step()) })
+  const used = step() // pas de 30 s utilise pour l'activation (un meme pas ne peut pas servir deux fois)
+  const done = await c.call('POST', '/2fa/setup', { csrf: csrfOf(setup.text), code: totpAt(secretOf(c.db), used) })
   const codes = [...done.text.matchAll(/<code>([a-z0-9]{5}-[a-z0-9]{5})<\/code>/g)].map((m) => m[1])
-  return { done, codes, password, email }
+  return { done, codes, password, email, step: used }
 }
 

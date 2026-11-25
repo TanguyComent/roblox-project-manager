@@ -28,6 +28,8 @@ export interface RobloxClient {
   /** Ressources (groupes, univers) que l'utilisateur a autorisees pour ce jeton. */
   getResources(accessToken: string): Promise<AuthorizedResources>
   getGroupName(accessToken: string, groupId: string): Promise<string | null>
+  /** Teste les identifiants de l'application aupres de Roblox (sans autorisation d'utilisateur). */
+  checkCredentials(): Promise<'valid' | 'rejected' | 'unknown'>
   revoke(refreshToken: string): Promise<void>
 }
 
@@ -38,26 +40,32 @@ export function newPkce() {
   return { verifier, challenge: b64url(createHash('sha256').update(verifier).digest()) }
 }
 
-interface Options {
-  clientId?: string
-  clientSecret?: string
+export interface RobloxCredentials { clientId?: string; clientSecret?: string; scopes?: string }
+
+interface Options extends RobloxCredentials {
+  /** Lu a CHAQUE appel : les identifiants peuvent donc changer (page Reglages) sans redemarrer le Host. */
+  credentials?: () => RobloxCredentials
   redirectUri?: string
-  scopes?: string
   fetchImpl?: typeof fetch
 }
 
 export function createRobloxClient(opts: Options = {}): RobloxClient {
-  const clientId = opts.clientId ?? config.robloxClientId
-  const clientSecret = opts.clientSecret ?? config.robloxClientSecret
+  const cred = () => {
+    const c = opts.credentials?.() ?? {}
+    return {
+      clientId: c.clientId ?? opts.clientId ?? config.robloxClientId,
+      clientSecret: c.clientSecret ?? opts.clientSecret ?? config.robloxClientSecret,
+      scopes: c.scopes ?? opts.scopes ?? config.robloxScopes,
+    }
+  }
   const redirectUri = opts.redirectUri ?? `${config.publicUrl}/account/roblox/callback`
-  const scopes = opts.scopes ?? config.robloxScopes
   const doFetch = opts.fetchImpl ?? fetch
 
   const form = async <T>(path: string, params: Record<string, string>): Promise<T> => {
     const res = await doFetch(`${BASE}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-      body: new URLSearchParams({ client_id: clientId ?? '', client_secret: clientSecret ?? '', ...params }),
+      body: new URLSearchParams({ client_id: cred().clientId ?? '', client_secret: cred().clientSecret ?? '', ...params }),
     })
     if (!res.ok) throw await failure(res)
     const text = await res.text()
@@ -73,13 +81,13 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
   })
 
   return {
-    enabled: !!clientId && !!clientSecret,
+    get enabled() { const c = cred(); return !!c.clientId && !!c.clientSecret },
     redirectUri,
-    scopes,
+    get scopes() { return cred().scopes },
     authorizeUrl(state, codeChallenge) {
       const u = new URL(`${BASE}/oauth/v1/authorize`)
       u.search = new URLSearchParams({
-        client_id: clientId ?? '', redirect_uri: redirectUri, scope: scopes, response_type: 'code',
+        client_id: cred().clientId ?? '', redirect_uri: redirectUri, scope: cred().scopes, response_type: 'code',
         state, code_challenge: codeChallenge, code_challenge_method: 'S256',
         prompt: 'select_account', // permet de choisir un autre compte Roblox que celui deja ouvert dans le navigateur
       }).toString()
@@ -114,6 +122,19 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
         const j = await authed<{ displayName?: string }>(`/cloud/v2/groups/${encodeURIComponent(groupId)}`, accessToken)
         return j.displayName ?? null
       } catch { return null } // le nom est un confort : jamais bloquant
+    },
+    // Envoie un code bidon : « invalid_client » = identifiants refuses ; « invalid_grant » = identifiants acceptes, c'est le code qui est faux.
+    async checkCredentials() {
+      try {
+        await form('/oauth/v1/token', { grant_type: 'authorization_code', code: 'verification', code_verifier: 'x'.repeat(43) })
+        return 'unknown'
+      } catch (e) {
+        if (e instanceof RobloxError) {
+          if (e.code === 'invalid_client' || e.status === 401) return 'rejected'
+          if (e.code === 'invalid_grant') return 'valid'
+        }
+        return 'unknown'
+      }
     },
     async revoke(refreshToken) {
       try { await form('/oauth/v1/token/revoke', { token: refreshToken }) } catch { /* meilleur effort */ }

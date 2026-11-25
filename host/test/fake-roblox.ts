@@ -93,7 +93,7 @@ export function fakeRoblox(o: { users?: FakeRobloxUser[]; resourcesStatus?: numb
     scopes: 'openid profile group:read',
     fetchImpl,
   })
-  return { client, calls, state, refreshTokens, accessTokens }
+  return { client, calls, state, refreshTokens, accessTokens, fetchImpl }
 }
 
 export type FakeRoblox = ReturnType<typeof fakeRoblox>

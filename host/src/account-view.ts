@@ -33,8 +33,8 @@ export async function renderAccount(
     groups: acc.status === 'ok' && roblox.enabled ? await withTimeout(listAuthorizedGroups(db, roblox, acc.id), 4000).catch(() => null) : null,
   })))
   return accountPage({
-    email: a.user.email, csrf: a.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a.user.id), notice: extra.notice,
-    roblox: { enabled: roblox.enabled, redirectUri: roblox.redirectUri, scopes: roblox.scopes, accounts, error: extra.robloxError, notice: ROBLOX_NOTICES[extra.robloxKey ?? ''] },
+    email: a.user.email, csrf: a.session.csrf, admin: a.user.is_admin === 1, recoveryLeft: remainingRecoveryCodes(db, a.user.id), notice: extra.notice,
+    roblox: { enabled: roblox.enabled, canConfigure: a.user.is_admin === 1, accounts, error: extra.robloxError, notice: ROBLOX_NOTICES[extra.robloxKey ?? ''] },
     github: {
       connection: c ? { login: c.login, template: c.template_repo ?? '', branch: c.template_branch ?? '', owner: c.default_owner ?? '' } : null,
       error: extra.githubError, notice: extra.githubNotice ?? GITHUB_NOTICES[extra.githubKey ?? ''],

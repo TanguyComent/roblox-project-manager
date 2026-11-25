@@ -25,12 +25,11 @@ test('PKCE : le defi est le SHA-256 base64url du verificateur', () => {
   assert.equal(challenge, createHash('sha256').update(verifier).digest('base64url'))
 })
 
-test('application OAuth non configuree : instructions affichees, connexion refusee', async () => {
+test('application OAuth non configuree : renvoie l\'admin vers les Reglages, connexion refusee', async () => {
   const { c } = await setup({ enabled: false })
   const page = (await c.call('GET', '/account')).text
-  assert.match(page, /pas configuree/)
-  assert.match(page, /ROBLOX_CLIENT_ID/)
-  assert.match(page, /http:\/\/localhost:3000\/account\/roblox\/callback/)
+  assert.match(page, /pas encore configuree/)
+  assert.match(page, /href="\/settings"/)
   assert.doesNotMatch(page, /Connecter un compte Roblox/)
   assert.equal((await c.call('GET', '/account/roblox/connect')).res.status, 400)
 })

@@ -90,6 +90,14 @@ const MIGRATIONS = [
      expires_at INTEGER NOT NULL
    );
    ALTER TABLE projects ADD COLUMN roblox_account_id INTEGER REFERENCES roblox_accounts(id);`,
+  // 6 : administrateur de l'instance (le premier compte) et reglages d'instance chiffres (identifiants de l'application OAuth Roblox...)
+  `ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
+   UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users);
+   CREATE TABLE settings (
+     key TEXT PRIMARY KEY,
+     value_enc TEXT NOT NULL,           -- chiffre (AES-256-GCM)
+     updated_at INTEGER NOT NULL
+   );`,
 ]
 
 export function openDb(file?: string): Db {

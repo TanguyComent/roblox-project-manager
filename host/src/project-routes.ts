@@ -51,7 +51,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   }
 
   const pendingWarnings = new Map<number, string>()
-  const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf })
+  const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf, admin: a.user.is_admin === 1 })
 
   // --- liste ----------------------------------------------------------------------------------------------------------------
   app.get('/projects', async (c) => {
