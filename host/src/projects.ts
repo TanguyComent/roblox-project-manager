@@ -118,9 +118,24 @@ export function addExperience(
     if (!label) { let n = 1; while (used.has(`Bench ${n}`)) n++; label = `Bench ${n}` }
     else if (used.has(label)) return { ok: false, error: 'Un banc d\'essai porte deja ce nom.' }
   }
+  const taken = db.prepare('SELECT label FROM experiences WHERE project_id = ? AND place_id = ?').get(projectId, e.placeId) as { label: string } | undefined
+  if (taken) return { ok: false, error: `Cette place est deja utilisee par « ${taken.label} ».` }
   const r = db.prepare('INSERT INTO experiences (project_id, kind, label, universe_id, place_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(projectId, e.kind, label, e.universeId, e.placeId, Date.now())
   return { ok: true, experience: db.prepare('SELECT * FROM experiences WHERE id = ?').get(Number(r.lastInsertRowid)) as unknown as Experience }
+}
+
+export function getExperience(db: Db, projectId: number, experienceId: number): Experience | undefined {
+  return db.prepare('SELECT * FROM experiences WHERE id = ? AND project_id = ?').get(experienceId, projectId) as unknown as Experience | undefined
+}
+
+// Change la place d'une experience existante (le type et le nom sont conserves).
+export function updateExperiencePlace(db: Db, projectId: number, experienceId: number, universeId: number, placeId: number): { ok: true } | { ok: false; error: string } {
+  if (!getExperience(db, projectId, experienceId)) return { ok: false, error: 'Experience introuvable.' }
+  const taken = db.prepare('SELECT label FROM experiences WHERE project_id = ? AND place_id = ? AND id != ?').get(projectId, placeId, experienceId) as { label: string } | undefined
+  if (taken) return { ok: false, error: `Cette place est deja utilisee par « ${taken.label} ».` }
+  db.prepare('UPDATE experiences SET universe_id = ?, place_id = ? WHERE id = ? AND project_id = ?').run(universeId, placeId, experienceId, projectId)
+  return { ok: true }
 }
 
 export function deleteExperience(db: Db, projectId: number, experienceId: number): boolean {

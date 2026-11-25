@@ -48,8 +48,16 @@ Roblox demande de choisir le compte, puis les experiences et **groupes** que ce 
 Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : il doit faire partie des
 groupes autorises par le jeton de ce compte, via `POST /oauth/v1/token/resources` ; le nom est rempli automatiquement), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
-Les experiences se creent a la main sur Roblox (l'Open Cloud ne permet pas de les creer) puis s'enregistrent ici (identifiants d'univers et de place).
 
+- **Places** : a la creation, la Release et la Dev se choisissent dans la liste des **places connues** du compte, ou par identifiants saisis a la main ;
+  elles sont **facultatives** (les places peuvent ne pas exister encore) et se renseignent ou se **changent** plus tard depuis la page du projet
+  (« Changer la place »). Une place choisie dans la liste est re-verifiee cote serveur ; une place ne peut servir qu'une fois par projet.
+- **Places connues** : les experiences que le compte a cochees sur l'ecran d'autorisation (lues avec son jeton, privees comprises, via
+  `GET /cloud/v2/universes/{id}`) et, pour « toutes les experiences » d'un proprietaire, ses experiences **publiques** ; les places de chaque
+  experience viennent de l'API publique `develop.roblox.com`. Les experiences privees non autorisees explicitement n'apparaissent donc pas :
+  il reste la saisie des identifiants. Cache de 5 minutes.
+- **Pas de creation automatique** : l'API Open Cloud de Roblox ne permet **pas** de creer une experience ou une place (verifie dans sa specification
+  OpenAPI). On les cree dans Roblox Studio, puis on les rattache ici. Les experiences se rattachent par leurs identifiants d'univers et de place.
 - **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`) avec **le compte
   GitHub de l'utilisateur** : chacun colle son propre jeton dans *Compte → GitHub* (jeton « fine-grained » : Administration + Contents en
   ecriture ; verifie aupres de GitHub, chiffre en base, jamais reaffiche). Dans *Compte → GitHub → Template par defaut*, il choisit son

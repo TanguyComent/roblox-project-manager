@@ -162,3 +162,17 @@ details.edit form { margin-top: 12px; }
 ul.hints { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; }
 button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 560px) { .acct { flex-direction: column; } .acct-actions { justify-content: flex-start; } }
+
+/* --- choix des places Roblox --- */
+.place-block { display: grid; gap: 6px; padding: 12px 14px; background: #0e1220; border: 1px solid var(--line); border-radius: 12px; }
+.place-block > .muted { margin-top: -4px; }
+.picker { display: grid; gap: 8px; }
+.picker details { color: var(--muted); font-size: 14px; }
+.picker details .two { margin-top: 8px; }
+.field { display: grid; gap: 6px; }
+.field > .label { font-size: 13.5px; font-weight: 550; }
+.exp { flex-wrap: wrap; }
+.exp details.change { flex-basis: 100%; margin-top: 4px; }
+.exp details.change summary { cursor: pointer; font-size: 13.5px; color: var(--accent); width: fit-content; }
+.exp details.change form { margin-top: 10px; }
+optgroup { color: var(--muted); font-style: normal; }

@@ -7,7 +7,10 @@ const BASE = 'https://apis.roblox.com'
 
 export interface RobloxTokens { accessToken: string; refreshToken: string; expiresIn: number; scope: string }
 export interface RobloxProfile { sub: string; username: string; displayName: string | null }
-export interface AuthorizedResources { groupIds: string[]; universeIds: string[] }
+export interface AuthorizedOwner { type: 'User' | 'Group'; id: string; /** « toutes les experiences » de ce proprietaire ont ete autorisees */ allExperiences: boolean }
+export interface AuthorizedResources { groupIds: string[]; universeIds: string[]; owners: AuthorizedOwner[] }
+export interface UniverseInfo { universeId: string; name: string; rootPlaceId: string | null }
+export interface PlaceInfo { placeId: string; name: string }
 
 export class RobloxError extends Error {
   status: number
@@ -28,6 +31,12 @@ export interface RobloxClient {
   /** Ressources (groupes, univers) que l'utilisateur a autorisees pour ce jeton. */
   getResources(accessToken: string): Promise<AuthorizedResources>
   getGroupName(accessToken: string, groupId: string): Promise<string | null>
+  /** Une experience autorisee (nom, place d'accueil) ; null si elle n'est pas accessible avec ce jeton. */
+  getUniverse(accessToken: string, universeId: string): Promise<UniverseInfo | null>
+  /** Les places d'une experience (API publique ; liste vide si indisponible). */
+  listUniversePlaces(universeId: string): Promise<PlaceInfo[]>
+  /** Experiences PUBLIQUES d'un proprietaire (utilisateur ou groupe) ; liste vide si indisponible. */
+  listPublicGames(ownerType: 'User' | 'Group', ownerId: string): Promise<UniverseInfo[]>
   /** Teste les identifiants de l'application aupres de Roblox (sans autorisation d'utilisateur). */
   checkCredentials(): Promise<'valid' | 'rejected' | 'unknown'>
   revoke(refreshToken: string): Promise<void>
@@ -72,7 +81,7 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
     return (text ? JSON.parse(text) : {}) as T
   }
   const authed = async <T>(path: string, accessToken: string): Promise<T> => {
-    const res = await doFetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' } })
+    const res = await doFetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
     if (!res.ok) throw await failure(res)
     return (await res.json()) as T
   }
@@ -109,19 +118,54 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
       const j = await form<{ resource_infos?: Info[] }>('/oauth/v1/token/resources', { token: accessToken })
       const groups = new Set<string>()
       const universes = new Set<string>()
+      const owners = new Map<string, AuthorizedOwner>()
       for (const info of j.resource_infos ?? []) {
+        const ownerType = info.owner?.type?.toLowerCase()
         // un groupe est accessible quand il apparait comme proprietaire autorise, ou comme ressource « group » de la portee
-        if (info.owner?.type?.toLowerCase() === 'group' && info.owner.id) groups.add(String(info.owner.id))
+        if (ownerType === 'group' && info.owner?.id) groups.add(String(info.owner.id))
         for (const id of info.resources?.group?.ids ?? []) if (/^\d+$/.test(id)) groups.add(id)
-        for (const id of info.resources?.universe?.ids ?? []) if (/^\d+$/.test(id)) universes.add(id)
+        const universeIds = info.resources?.universe?.ids ?? []
+        for (const id of universeIds) if (/^\d+$/.test(id)) universes.add(id)
+        // « U » = toutes les experiences du proprietaire autorisant
+        if (info.owner?.id && (ownerType === 'group' || ownerType === 'user')) {
+          const key = `${ownerType}:${info.owner.id}`
+          const prev = owners.get(key)
+          owners.set(key, { type: ownerType === 'group' ? 'Group' : 'User', id: String(info.owner.id), allExperiences: !!prev?.allExperiences || universeIds.includes('U') })
+        }
       }
-      return { groupIds: [...groups], universeIds: [...universes] }
+      return { groupIds: [...groups], universeIds: [...universes], owners: [...owners.values()] }
     },
     async getGroupName(accessToken, groupId) {
       try {
         const j = await authed<{ displayName?: string }>(`/cloud/v2/groups/${encodeURIComponent(groupId)}`, accessToken)
         return j.displayName ?? null
       } catch { return null } // le nom est un confort : jamais bloquant
+    },
+    async getUniverse(accessToken, universeId) {
+      if (!/^\d+$/.test(universeId)) return null
+      try {
+        const j = await authed<{ displayName?: string; rootPlace?: string }>(`/cloud/v2/universes/${universeId}`, accessToken)
+        return { universeId, name: j.displayName ?? `Experience ${universeId}`, rootPlaceId: /places\/(\d+)/.exec(j.rootPlace ?? '')?.[1] ?? null }
+      } catch { return null }
+    },
+    async listUniversePlaces(universeId) {
+      if (!/^\d+$/.test(universeId)) return []
+      try {
+        const res = await doFetch(`https://develop.roblox.com/v1/universes/${universeId}/places?limit=100`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
+        if (!res.ok) return []
+        const j = (await res.json()) as { data?: { id: number | string; name?: string }[] }
+        return (j.data ?? []).map((p) => ({ placeId: String(p.id), name: p.name ?? `Place ${p.id}` }))
+      } catch { return [] }
+    },
+    async listPublicGames(ownerType, ownerId) {
+      if (!/^\d+$/.test(ownerId)) return []
+      try {
+        const kind = ownerType === 'Group' ? 'groups' : 'users'
+        const res = await doFetch(`https://games.roblox.com/v2/${kind}/${ownerId}/games?limit=50`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) })
+        if (!res.ok) return []
+        const j = (await res.json()) as { data?: { id: number | string; name?: string; rootPlace?: { id?: number | string } }[] }
+        return (j.data ?? []).map((g) => ({ universeId: String(g.id), name: g.name ?? `Experience ${g.id}`, rootPlaceId: g.rootPlace?.id !== undefined ? String(g.rootPlace.id) : null }))
+      } catch { return [] }
     },
     // Envoie un code bidon : « invalid_client » = identifiants refuses ; « invalid_grant » = identifiants acceptes, c'est le code qui est faux.
     async checkCredentials() {

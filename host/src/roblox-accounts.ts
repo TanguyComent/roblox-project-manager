@@ -43,6 +43,7 @@ export function saveAccount(db: Db, userId: number, profile: RobloxProfile, toke
   )
   const row = db.prepare('SELECT id FROM roblox_accounts WHERE user_id = ? AND roblox_user_id = ?').get(userId, profile.sub) as { id: number }
   groupCache.delete(row.id)
+  placeCache.delete(row.id)
   return row.id
 }
 
@@ -53,6 +54,7 @@ export function getRefreshToken(db: Db, userId: number, id: number): string | nu
 
 export function deleteAccount(db: Db, userId: number, id: number): boolean {
   groupCache.delete(id)
+  placeCache.delete(id)
   return Number(db.prepare('DELETE FROM roblox_accounts WHERE id = ? AND user_id = ?').run(id, userId).changes) > 0
 }
 
@@ -153,4 +155,42 @@ export async function checkGroupAccess(db: Db, client: RobloxClient, account: Pi
     if (e instanceof RobloxError && e.code === 'needs_reauth') return { ok: false, status: 400, error: `${e.message} (page Compte).` }
     return { ok: false, status: 502, error: `Impossible de verifier l'acces au groupe : ${e instanceof RobloxError ? e.message : 'Roblox ne repond pas'}.` }
   }
+}
+
+// --- places connues ------------------------------------------------------------------------------------------------------------------
+// Les places que le site connait pour ce compte : les experiences cochees sur l'ecran d'autorisation (lues avec le jeton, privees comprises),
+// plus, pour « toutes les experiences » d'un proprietaire, ses experiences PUBLIQUES (l'API ne liste pas les autres).
+export interface KnownPlace { universeId: string; universeName: string; placeId: string; placeName: string; isRoot: boolean }
+const PLACE_CACHE_MS = 5 * 60_000
+const MAX_UNIVERSES = 40
+const placeCache = new Map<number, { at: number; places: KnownPlace[] }>()
+
+export async function listKnownPlaces(db: Db, client: RobloxClient, accountId: number, opts: { fresh?: boolean } = {}): Promise<KnownPlace[]> {
+  const cached = placeCache.get(accountId)
+  if (!opts.fresh && cached && now() - cached.at < PLACE_CACHE_MS) return cached.places
+  const token = await getAccessToken(db, client, accountId)
+  const resources = await client.getResources(token)
+
+  const universes = new Map<string, { name: string; rootPlaceId: string | null }>()
+  await Promise.all(resources.universeIds.slice(0, MAX_UNIVERSES).map(async (id) => {
+    const info = await client.getUniverse(token, id)
+    if (info) universes.set(id, { name: info.name, rootPlaceId: info.rootPlaceId })
+  }))
+  for (const owner of resources.owners.filter((o) => o.allExperiences)) {
+    for (const g of await client.listPublicGames(owner.type, owner.id)) {
+      if (universes.size >= MAX_UNIVERSES) break
+      if (!universes.has(g.universeId)) universes.set(g.universeId, { name: g.name, rootPlaceId: g.rootPlaceId })
+    }
+  }
+
+  const places: KnownPlace[] = []
+  await Promise.all([...universes].map(async ([universeId, u]) => {
+    const list = await client.listUniversePlaces(universeId)
+    // la place d'accueil est toujours connue, meme si la liste des places est indisponible
+    if (u.rootPlaceId && !list.some((p) => p.placeId === u.rootPlaceId)) list.unshift({ placeId: u.rootPlaceId, name: u.name })
+    for (const p of list) places.push({ universeId, universeName: u.name, placeId: p.placeId, placeName: p.name, isRoot: p.placeId === u.rootPlaceId })
+  }))
+  places.sort((a, b) => a.universeName.localeCompare(b.universeName) || Number(b.isRoot) - Number(a.isRoot) || a.placeName.localeCompare(b.placeName))
+  placeCache.set(accountId, { at: now(), places })
+  return places
 }
