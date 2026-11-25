@@ -8,6 +8,8 @@ import {
   addExperience, createProject, deleteExperience, deleteProject, getProject, listExperiences, listProjects, parseRepo, parseRobloxId,
   slugify, updateProject, type ExperienceKind, type Project,
 } from './projects.ts'
+import { checkGroupAccess, getAccount, listAccounts, listAuthorizedGroups, type RobloxAccount } from './roblox-accounts.ts'
+import type { RobloxClient } from './roblox.ts'
 import { messagePage } from './views.ts'
 
 type Status = 200 | 400 | 403 | 404 | 502
@@ -16,6 +18,7 @@ type Auth = NonNullable<Context<Env>['var']['auth']>
 interface Ctx {
   db: Db
   githubFor: GithubFactory
+  roblox: RobloxClient
   html: (c: Context, body: string, status?: Status) => Response
   form: (c: Context) => Promise<{ s: (k: string) => string }>
   csrfOk: (c: Context, given: string) => boolean
@@ -27,7 +30,7 @@ const NOTICES: Record<string, string> = {
 }
 
 export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
-  const { db, githubFor, html, form, csrfOk, requireFull } = ctx
+  const { db, githubFor, roblox, html, form, csrfOk, requireFull } = ctx
 
   // Garde commune : session complete + jeton CSRF (pour les POST) + projet appartenant a l'utilisateur.
   const guard = async (c: Context, opts: { post?: boolean; project?: boolean } = {}) => {
@@ -58,9 +61,19 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   })
 
   // --- creation -------------------------------------------------------------------------------------------------------------
-  const newPage = (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
+  // Comptes Roblox de l'utilisateur et, pour aider a choisir un groupe, ceux que chaque compte a autorise (lecture au mieux, 4 s max).
+  const robloxChoices = async (userId: number) => {
+    const accounts = listAccounts(db, userId)
+    const timeout = <T,>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000).unref())])
+    return Promise.all(accounts.map(async (acc) => ({
+      id: acc.id, username: acc.username, needsReauth: acc.status !== 'ok',
+      groups: acc.status === 'ok' && roblox.enabled ? await timeout(listAuthorizedGroups(db, roblox, acc.id)).catch(() => null) : null,
+    })))
+  }
+
+  const newPage = async (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
     html(c, newProjectPage({
-      ...viewer(a), error, form, githubLogin: getConnection(db, a.user.id)?.login ?? null,
+      ...viewer(a), error, form, accounts: await robloxChoices(a.user.id), githubLogin: getConnection(db, a.user.id)?.login ?? null,
       defaults: (() => {
         const gc = getConnection(db, a.user.id)
         return { template: gc?.template_repo ?? '', branch: gc?.template_branch ?? '', owner: gc?.default_owner ?? gc?.login ?? '' }
@@ -80,18 +93,28 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const s = f.s
     const mode = (['template', 'existing', 'none'].includes(s('repoMode')) ? s('repoMode') : 'none') as 'template' | 'existing' | 'none'
     const values: NewProjectForm = {
-      name: s('name').trim(), groupId: s('groupId').trim(), groupName: s('groupName').trim(), repoMode: mode,
+      name: s('name').trim(), robloxAccountId: s('robloxAccountId').trim(), groupId: s('groupId').trim(), groupName: s('groupName').trim(), repoMode: mode,
       template: s('template').trim(), branch: s('branch').trim(), owner: s('owner').trim(), isPrivate: s('isPrivate') === '1', existing: s('existing').trim(),
     }
     const fail = (msg: string, status: Status = 400) => newPage(c, a, values, msg, status)
 
     if (!values.name || values.name.length > 60) return fail('Le nom doit faire entre 1 et 60 caracteres.')
+
+    // compte Roblox obligatoire, et le groupe (facultatif) doit etre accessible via SON jeton ; verifie AVANT de creer quoi que ce soit
+    if (listAccounts(db, a.user.id).length === 0) return fail('Connecte d\'abord un compte Roblox (page Compte) : un projet en a besoin pour publier.')
+    const account = /^\d{1,12}$/.test(values.robloxAccountId ?? '') ? getAccount(db, a.user.id, Number(values.robloxAccountId)) : undefined
+    if (!account) return fail('Choisis un compte Roblox parmi ceux que tu as connectes.')
+    if (account.status !== 'ok') return fail(`Le compte Roblox « ${account.username} » doit etre reconnecte (page Compte).`)
     let groupId: number | null = null
+    let groupName = values.groupName || null
     if (values.groupId) {
       groupId = parseRobloxId(values.groupId)
       if (groupId === null) return fail('Identifiant de groupe invalide (chiffres uniquement).')
+      if ((values.groupName ?? '').length > 80) return fail('Le nom du groupe est trop long.')
+      const check = await checkGroupAccess(db, roblox, account, groupId)
+      if (!check.ok) return fail(check.error, check.status)
+      groupName ||= check.name
     }
-    if ((values.groupName ?? '').length > 80) return fail('Le nom du groupe est trop long.')
 
     let githubRepo: string | null = null
     let warning: string | undefined
@@ -117,7 +140,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
       }
     }
 
-    const project = createProject(db, a.user.id, { name: values.name, groupId, groupName: values.groupName || null, githubRepo })
+    const project = createProject(db, a.user.id, { name: values.name, groupId, groupName, githubRepo, robloxAccountId: account.id })
     // l'avertissement (branche non appliquee) est garde le temps d'un affichage, sans passer par l'URL
     if (warning) pendingWarnings.set(project.id, warning)
     return c.redirect(`/projects/${project.id}?n=created`, 303)
@@ -126,9 +149,9 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   const takeWarning = (id: number) => { const w = pendingWarnings.get(id); pendingWarnings.delete(id); return w }
 
   // --- detail ---------------------------------------------------------------------------------------------------------------
-  const detail = (c: Context, a: Auth, project: Project, extra: { error?: string; experienceError?: string; notice?: string } = {}, status: Status = 200) =>
+  const detail = async (c: Context, a: Auth, project: Project, extra: { error?: string; experienceError?: string; notice?: string } = {}, status: Status = 200) =>
     html(c, projectPage({
-      ...viewer(a), project, experiences: listExperiences(db, project.id),
+      ...viewer(a), project, experiences: listExperiences(db, project.id), accounts: await robloxChoices(a.user.id),
       notice: extra.notice ?? NOTICES[c.req.query('n') ?? ''], error: extra.error ?? takeWarning(project.id), experienceError: extra.experienceError,
     }), status)
 
@@ -146,13 +169,23 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const groupRaw = f.s('groupId').trim()
     const groupName = f.s('groupName').trim()
     const repoRaw = f.s('repo').trim()
+    const accountRaw = f.s('robloxAccountId').trim()
     if (!name || name.length > 60) return detail(c, a, project!, { error: 'Le nom doit faire entre 1 et 60 caracteres.' }, 400)
-    const groupId = groupRaw ? parseRobloxId(groupRaw) : null
+    const account: RobloxAccount | undefined = /^\d{1,12}$/.test(accountRaw) ? getAccount(db, a.user.id, Number(accountRaw)) : undefined
+    if (!account) return detail(c, a, project!, { error: 'Choisis un compte Roblox parmi ceux que tu as connectes.' }, 400)
+    if (account.status !== 'ok') return detail(c, a, project!, { error: `Le compte Roblox « ${account.username} » doit etre reconnecte (page Compte).` }, 400)
+    let groupId = groupRaw ? parseRobloxId(groupRaw) : null
     if (groupRaw && groupId === null) return detail(c, a, project!, { error: 'Identifiant de groupe invalide (chiffres uniquement).' }, 400)
     if (groupName.length > 80) return detail(c, a, project!, { error: 'Le nom du groupe est trop long.' }, 400)
+    let resolvedName: string | null = groupName || null
+    if (groupId !== null) {
+      const check = await checkGroupAccess(db, roblox, account, groupId)
+      if (!check.ok) return detail(c, a, project!, { error: check.error }, check.status)
+      resolvedName ||= check.name
+    }
     const githubRepo = repoRaw ? parseRepo(repoRaw) : null
     if (repoRaw && !githubRepo) return detail(c, a, project!, { error: 'Depot invalide : attendu « proprietaire/depot » ou une URL GitHub.' }, 400)
-    updateProject(db, a.user.id, project!.id, { name, groupId, groupName: groupName || null, githubRepo })
+    updateProject(db, a.user.id, project!.id, { name, groupId, groupName: resolvedName, githubRepo, robloxAccountId: account.id })
     return c.redirect(`/projects/${project!.id}?n=updated`, 303)
   })
 

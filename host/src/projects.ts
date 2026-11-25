@@ -12,6 +12,7 @@ export interface Project {
   roblox_group_id: number | null
   roblox_group_name: string | null
   github_repo: string | null
+  roblox_account_id: number | null
   created_at: number
 }
 export interface Experience {
@@ -46,11 +47,12 @@ export function parseRepo(raw: string): string | null {
 }
 
 // --- projets ----------------------------------------------------------------------------------------------------------------
-export function listProjects(db: Db, ownerId: number): (Project & { experience_count: number })[] {
+export function listProjects(db: Db, ownerId: number): (Project & { experience_count: number; roblox_username: string | null })[] {
   return db.prepare(
-    `SELECT p.*, (SELECT COUNT(*) FROM experiences e WHERE e.project_id = p.id) AS experience_count
-     FROM projects p WHERE p.owner_id = ? ORDER BY p.created_at DESC, p.id DESC`,
-  ).all(ownerId) as unknown as (Project & { experience_count: number })[]
+    `SELECT p.*, (SELECT COUNT(*) FROM experiences e WHERE e.project_id = p.id) AS experience_count, a.username AS roblox_username
+     FROM projects p LEFT JOIN roblox_accounts a ON a.id = p.roblox_account_id
+     WHERE p.owner_id = ? ORDER BY p.created_at DESC, p.id DESC`,
+  ).all(ownerId) as unknown as (Project & { experience_count: number; roblox_username: string | null })[]
 }
 
 export function getProject(db: Db, ownerId: number, id: number): Project | undefined {
@@ -66,21 +68,21 @@ export function uniqueSlug(db: Db, ownerId: number, name: string): string {
 
 export function createProject(
   db: Db, ownerId: number,
-  p: { name: string; groupId: number | null; groupName: string | null; githubRepo: string | null },
+  p: { name: string; groupId: number | null; groupName: string | null; githubRepo: string | null; robloxAccountId: number | null },
 ): Project {
   const slug = uniqueSlug(db, ownerId, p.name)
   const r = db.prepare(
-    'INSERT INTO projects (owner_id, name, slug, roblox_group_id, roblox_group_name, github_repo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(ownerId, p.name, slug, p.groupId, p.groupName, p.githubRepo, Date.now())
+    'INSERT INTO projects (owner_id, name, slug, roblox_group_id, roblox_group_name, github_repo, roblox_account_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(ownerId, p.name, slug, p.groupId, p.groupName, p.githubRepo, p.robloxAccountId, Date.now())
   return getProject(db, ownerId, Number(r.lastInsertRowid))!
 }
 
 export function updateProject(
   db: Db, ownerId: number, id: number,
-  p: { name: string; groupId: number | null; groupName: string | null; githubRepo: string | null },
+  p: { name: string; groupId: number | null; groupName: string | null; githubRepo: string | null; robloxAccountId: number | null },
 ): boolean {
-  const r = db.prepare('UPDATE projects SET name = ?, roblox_group_id = ?, roblox_group_name = ?, github_repo = ? WHERE id = ? AND owner_id = ?')
-    .run(p.name, p.groupId, p.groupName, p.githubRepo, id, ownerId)
+  const r = db.prepare('UPDATE projects SET name = ?, roblox_group_id = ?, roblox_group_name = ?, github_repo = ?, roblox_account_id = ? WHERE id = ? AND owner_id = ?')
+    .run(p.name, p.groupId, p.groupName, p.githubRepo, p.robloxAccountId, id, ownerId)
   return Number(r.changes) > 0
 }
 

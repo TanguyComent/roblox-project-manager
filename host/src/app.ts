@@ -16,6 +16,8 @@ import type { Db } from './db.ts'
 import { renderAccount } from './account-view.ts'
 import { githubRoutes } from './github-routes.ts'
 import { createGithubClient, type GithubFactory } from './github.ts'
+import { createRobloxClient, type RobloxClient } from './roblox.ts'
+import { robloxRoutes } from './roblox-routes.ts'
 import { projectRoutes } from './project-routes.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
@@ -25,7 +27,7 @@ const CSS_PATH = join(import.meta.dirname, '..', 'public', 'app.css')
 export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
 // opts.githubFor : fabrique de client GitHub a partir du jeton d'un utilisateur (remplacable dans les tests).
-export function createApp(db: Db, opts: { githubFor?: GithubFactory } = {}) {
+export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: RobloxClient } = {}) {
   const app = new Hono<Env>()
   // Tentatives de connexion : par adresse IP (large) et par e-mail (strict, uniquement les echecs).
   const ipLimit = new RateLimiter(30, 15 * 60_000)
@@ -123,23 +125,26 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory } = {}) {
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))
 
-  app.get('/account', (c) => {
+  const roblox = opts.roblox ?? createRobloxClient()
+  app.get('/account', async (c) => {
     const a = auth(c)
     const redirect = home(c)
     if (redirect) return redirect
-    return html(c, renderAccount(db, a!, {
+    return html(c, await renderAccount(db, roblox, a!, {
       notice: c.req.query('others') ? 'Les autres appareils ont ete deconnectes.' : undefined,
       githubKey: c.req.query('g'),
+      robloxKey: c.req.query('r'),
     }))
   })
 
   // Projets, experiences, GitHub (sessions completes uniquement)
   const githubFor: GithubFactory = opts.githubFor ?? ((token) => createGithubClient(token))
   const shared = {
-    db, html, form, csrfOk, githubFor,
+    db, html, form, csrfOk, githubFor, roblox,
     requireFull: (c: Context) => { const a = auth(c); return a && a.session.stage === 'full' ? a : (home(c) ?? c.redirect('/login')) },
   }
   githubRoutes(app, shared)
+  robloxRoutes(app, shared)
   projectRoutes(app, shared)
 
   // Connexion --------------------------------------------------------------------------------------------------------------------

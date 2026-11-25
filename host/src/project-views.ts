@@ -7,7 +7,7 @@ const groupText = (p: Pick<Project, 'roblox_group_id' | 'roblox_group_name'>) =>
 const repoLink = (repo: string | null) =>
   repo ? `<a href="https://github.com/${esc(repo)}" target="_blank" rel="noopener noreferrer">${esc(repo)}</a>` : '<span class="muted">Aucun depot</span>'
 
-export function projectsPage(o: Viewer & { projects: (Project & { experience_count: number })[]; notice?: string }) {
+export function projectsPage(o: Viewer & { projects: (Project & { experience_count: number; roblox_username: string | null })[]; notice?: string }) {
   const rows = o.projects.map((p) => `
   <a class="row" href="/projects/${p.id}">
     <div class="row-main">
@@ -15,7 +15,7 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
       <span class="muted">${groupText(p)}</span>
     </div>
     <div class="row-side">
-      <span class="muted">${p.github_repo ? esc(p.github_repo) : 'sans depot'}</span>
+      <span class="muted">${p.roblox_username ? `@${esc(p.roblox_username)} · ` : ''}${p.github_repo ? esc(p.github_repo) : 'sans depot'}</span>
       <span class="pill">${p.experience_count} experience${p.experience_count > 1 ? 's' : ''}</span>
     </div>
   </a>`).join('')
@@ -30,13 +30,32 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
 </section>`)
 }
 
+
+export interface AccountChoice { id: number; username: string; needsReauth: boolean; groups: { id: string; name: string | null }[] | null }
+
+// Liste deroulante des comptes Roblox connectes (un compte a reconnecter n'est pas selectionnable).
+const accountSelect = (accounts: AccountChoice[], selected: string | number | undefined) => `
+    <select name="robloxAccountId" required>
+      ${selected ? '' : '<option value="" selected disabled>Choisir un compte…</option>'}
+      ${accounts.map((a) => `<option value="${a.id}"${String(selected) === String(a.id) ? ' selected' : ''}${a.needsReauth ? ' disabled' : ''}>@${esc(a.username)}${a.needsReauth ? ' (a reconnecter)' : ''}</option>`).join('')}
+    </select>`
+
+// Aide au choix du groupe : ceux que chaque compte a autorises (le groupe saisi doit en faire partie).
+const groupHints = (accounts: AccountChoice[]) => {
+  const lines = accounts.filter((a) => a.groups && a.groups.length).map((a) =>
+    `<li><strong>@${esc(a.username)}</strong> : ${a.groups!.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</li>`)
+  return lines.length
+    ? `<details><summary>Groupes accessibles avec tes comptes</summary><ul class="hints">${lines.join('')}</ul></details>`
+    : '<p class="muted small">Aucun groupe autorise pour l\'instant : autorise-en un en reconnectant le compte (page Compte).</p>'
+}
+
 export interface NewProjectForm {
-  name?: string; groupId?: string; groupName?: string
+  name?: string; robloxAccountId?: string; groupId?: string; groupName?: string
   repoMode?: 'template' | 'existing' | 'none'
   template?: string; branch?: string; owner?: string; isPrivate?: boolean; existing?: string
 }
 
-export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; githubLogin: string | null; defaults: { template: string; branch: string; owner: string } }) {
+export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; accounts: AccountChoice[]; githubLogin: string | null; defaults: { template: string; branch: string; owner: string } }) {
   const f = o.form
   const githubEnabled = !!o.githubLogin
   const mode = f.repoMode ?? (githubEnabled ? 'template' : 'none')
@@ -55,13 +74,20 @@ export function newProjectPage(o: Viewer & { error?: string; form: NewProjectFor
       <input type="text" name="name" value="${esc(f.name ?? '')}" maxlength="60" required autofocus placeholder="Steal Treasure">
     </label>
     <fieldset>
-      <legend>Groupe Roblox <span class="hint">facultatif</span></legend>
+      <legend>Compte Roblox</legend>
+      ${o.accounts.length ? `<label>Compte qui publie ce projet
+        ${accountSelect(o.accounts, f.robloxAccountId)}
+      </label>` : '<div class="alert error" role="note">Aucun compte Roblox connecte. <a href="/account">Connecte-en un dans la page Compte</a> pour creer un projet.</div>'}
+    </fieldset>
+    <fieldset>
+      <legend>Groupe Roblox <span class="hint">facultatif, doit etre accessible via le compte choisi</span></legend>
+      ${groupHints(o.accounts)}
       <div class="two">
         <label>Identifiant du groupe
           <input type="text" name="groupId" value="${esc(f.groupId ?? '')}" inputmode="numeric" pattern="[0-9]*" placeholder="12345678">
         </label>
         <label>Nom du groupe
-          <input type="text" name="groupName" value="${esc(f.groupName ?? '')}" maxlength="80" placeholder="Boilr Studio">
+          <input type="text" name="groupName" value="${esc(f.groupName ?? '')}" maxlength="80" placeholder="rempli automatiquement">
         </label>
       </div>
     </fieldset>
@@ -119,7 +145,7 @@ function experienceSection(kind: ExperienceKind, items: Experience[], v: Viewer,
   </div>`
 }
 
-export function projectPage(o: Viewer & { project: Project; experiences: Experience[]; error?: string; notice?: string; experienceError?: string }) {
+export function projectPage(o: Viewer & { project: Project; experiences: Experience[]; accounts: AccountChoice[]; error?: string; notice?: string; experienceError?: string }) {
   const p = o.project
   const by = (k: ExperienceKind) => o.experiences.filter((e) => e.kind === k)
   const has = (k: ExperienceKind) => by(k).length > 0
@@ -133,6 +159,7 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
   </div>
   ${alert(o.notice, 'ok')}${alert(o.error)}
   <dl class="facts">
+    <dt>Compte Roblox</dt><dd>${(() => { const acc = o.accounts.find((a) => a.id === p.roblox_account_id); return acc ? `@${esc(acc.username)}${acc.needsReauth ? ' <span class="pill warn">A reconnecter</span>' : ''}` : '<span class="muted">Aucun</span>' })()}</dd>
     <dt>Depot GitHub</dt><dd>${repoLink(p.github_repo)}</dd>
     <dt>Identifiant</dt><dd><code>${esc(p.slug)}</code></dd>
   </dl>
@@ -141,6 +168,8 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
     <form method="post" action="/projects/${p.id}" autocomplete="off">
       ${csrfField(o.csrf)}
       <label>Nom <input type="text" name="name" value="${esc(p.name)}" maxlength="60" required></label>
+      <label>Compte Roblox ${accountSelect(o.accounts, p.roblox_account_id ?? undefined)}</label>
+      ${groupHints(o.accounts)}
       <div class="two">
         <label>Identifiant du groupe <input type="text" name="groupId" value="${p.roblox_group_id ?? ''}" inputmode="numeric" pattern="[0-9]*"></label>
         <label>Nom du groupe <input type="text" name="groupName" value="${esc(p.roblox_group_name ?? '')}" maxlength="80"></label>

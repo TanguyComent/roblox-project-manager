@@ -7,6 +7,7 @@ import { GithubError, type GithubFactory } from './github.ts'
 import { templatePickerPage, type TemplatePickerData } from './github-template-view.ts'
 import { renderAccount } from './account-view.ts'
 import type { Db } from './db.ts'
+import type { RobloxClient } from './roblox.ts'
 
 type Auth = NonNullable<Context<Env>['var']['auth']>
 type Status = 200 | 400 | 403 | 502
@@ -14,6 +15,7 @@ type Status = 200 | 400 | 403 | 502
 interface Ctx {
   db: Db
   githubFor: GithubFactory
+  roblox: RobloxClient
   html: (c: Context, body: string, status?: Status) => Response
   form: (c: Context) => Promise<{ s: (k: string) => string }>
   csrfOk: (c: Context, given: string) => boolean
@@ -24,7 +26,7 @@ const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
 
 export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
-  const { db, githubFor, html, form, csrfOk, requireFull } = ctx
+  const { db, githubFor, roblox, html, form, csrfOk, requireFull } = ctx
   const connectLimit = new RateLimiter(10, 60 * 60_000) // essais de jeton par utilisateur et par heure
 
   const guard = async (c: Context) => {
@@ -34,8 +36,8 @@ export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
     if (!csrfOk(c, f.s('csrf'))) return { res: c.text('Jeton invalide', 403) } as const
     return { a, f } as const
   }
-  const back = (c: Context, a: Auth, extra: { githubError?: string; githubNotice?: string }, status: Status = 200) =>
-    html(c, renderAccount(db, a, extra), status)
+  const back = async (c: Context, a: Auth, extra: { githubError?: string; githubNotice?: string }, status: Status = 200) =>
+    html(c, await renderAccount(db, roblox, a, extra), status)
 
   app.post('/account/github', async (c) => {
     const g = await guard(c)

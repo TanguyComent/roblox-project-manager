@@ -67,6 +67,29 @@ const MIGRATIONS = [
    );`,
   // 4 : branche du depot template a utiliser
   `ALTER TABLE github_connections ADD COLUMN template_branch TEXT;`,
+  // 5 : comptes Roblox (OAuth 2.0 / Open Cloud) d'un utilisateur, etats OAuth en cours, compte Roblox d'un projet
+  `CREATE TABLE roblox_accounts (
+     id INTEGER PRIMARY KEY,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     roblox_user_id TEXT NOT NULL,
+     username TEXT NOT NULL,
+     display_name TEXT,
+     refresh_token_enc TEXT NOT NULL,   -- chiffre ; a usage unique cote Roblox (rotation a chaque rafraichissement)
+     access_token_enc TEXT,             -- chiffre ; valable 15 minutes
+     access_expires_at INTEGER NOT NULL DEFAULT 0,
+     scopes TEXT NOT NULL DEFAULT '',
+     status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'needs_reauth')),
+     created_at INTEGER NOT NULL,
+     UNIQUE (user_id, roblox_user_id)
+   );
+   CREATE TABLE oauth_states (
+     state_hash TEXT PRIMARY KEY,       -- sha256 de la valeur "state" envoyee a Roblox
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     session_id TEXT NOT NULL,          -- la connexion doit etre terminee dans la session qui l'a demandee
+     code_verifier_enc TEXT NOT NULL,   -- PKCE
+     expires_at INTEGER NOT NULL
+   );
+   ALTER TABLE projects ADD COLUMN roblox_account_id INTEGER REFERENCES roblox_accounts(id);`,
 ]
 
 export function openDb(file?: string): Db {

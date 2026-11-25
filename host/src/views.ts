@@ -154,6 +154,50 @@ export function appPage(title: string, v: Viewer, active: 'projects' | 'account'
 ${body}`, { wide: true })
 }
 
+export interface RobloxCardData {
+  /** false : l'application OAuth de l'instance n'est pas configuree. */
+  enabled: boolean
+  redirectUri: string
+  scopes: string
+  accounts: { id: number; username: string; displayName: string | null; robloxId: string; needsReauth: boolean; groups: { id: string; name: string | null }[] | null; projects: string[] }[]
+  error?: string
+  notice?: string
+}
+
+function robloxCard(r: RobloxCardData, csrf: string) {
+  const setup = !r.enabled ? `
+  <div class="alert error" role="note">
+    La connexion Roblox n'est pas configuree sur cette instance. Cree une application OAuth 2.0 sur
+    <a href="https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab" target="_blank" rel="noopener noreferrer">create.roblox.com</a>,
+    ajoute l'adresse de redirection <code>${esc(r.redirectUri)}</code> et les portees <code>${esc(r.scopes)}</code>, puis renseigne
+    <code>ROBLOX_CLIENT_ID</code> et <code>ROBLOX_CLIENT_SECRET</code> dans <code>host/.env</code> et redemarre le Host.
+  </div>` : ''
+  const rows = r.accounts.map((a) => `
+    <li class="exp acct">
+      <div class="row-main">
+        <strong>${esc(a.displayName && a.displayName !== a.username ? `${a.displayName} (@${a.username})` : `@${a.username}`)}</strong>
+        <span class="muted">identifiant ${esc(a.robloxId)} · ${a.needsReauth ? '<span class="pill warn">A reconnecter</span>' : '<span class="pill ok">Connecte</span>'}</span>
+        ${a.groups === null ? '' : a.groups.length
+          ? `<span class="muted small">Groupes autorises : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
+          : '<span class="muted small">Aucun groupe autorise (seulement ce compte).</span>'}
+        ${a.projects.length ? `<span class="muted small">Utilise par : ${a.projects.map(esc).join(', ')}</span>` : ''}
+      </div>
+      <div class="acct-actions">
+        ${r.enabled ? `<a class="button" href="/account/roblox/connect">${a.needsReauth ? 'Reconnecter' : 'Mettre a jour'}</a>` : ''}
+        <form method="post" action="/account/roblox/${a.id}/disconnect" class="inline">${csrfField(csrf)}<button class="ghost danger" type="submit"${a.projects.length ? ' disabled title="Utilise par un projet"' : ''}>Deconnecter</button></form>
+      </div>
+    </li>`).join('')
+  return `
+<section class="card">
+  <h2>Comptes Roblox</h2>
+  <p class="muted">Les comptes qui publient tes experiences (Open Cloud, OAuth 2.0). Tu peux en connecter plusieurs ; chaque projet utilise l'un d'eux.</p>
+  ${alert(r.notice, 'ok')}${alert(r.error)}${setup}
+  ${r.accounts.length ? `<ul class="exps">${rows}</ul>` : r.enabled ? '<div class="empty"><p><strong>Aucun compte Roblox connecte.</strong></p></div>' : ''}
+  ${r.enabled ? `<div class="actions"><a class="button primary" href="/account/roblox/connect">${r.accounts.length ? 'Connecter un autre compte' : 'Connecter un compte Roblox'}</a></div>
+  <p class="muted small">Roblox te demande de choisir le compte, puis les experiences et groupes que ce compte autorise. Pour qu'un groupe soit utilisable dans un projet, autorise-le a cette etape.</p>` : ''}
+</section>`
+}
+
 export interface GithubCardData {
   connection: { login: string; template: string; branch: string; owner: string } | null
   error?: string
@@ -205,13 +249,14 @@ function githubCard(g: GithubCardData, csrf: string) {
 </section>`
 }
 
-export function accountPage(o: Viewer & { recoveryLeft: number; notice?: string; github: GithubCardData }) {
+export function accountPage(o: Viewer & { recoveryLeft: number; notice?: string; github: GithubCardData; roblox: RobloxCardData }) {
   return appPage('Compte', o, 'account', `
 <section class="card">
   <h1>Compte</h1>
   ${alert(o.notice, 'ok')}
   <p class="muted">${esc(o.email)}</p>
 </section>
+${robloxCard(o.roblox, o.csrf)}
 ${githubCard(o.github, o.csrf)}
 <section class="card">
   <h2>Securite</h2>

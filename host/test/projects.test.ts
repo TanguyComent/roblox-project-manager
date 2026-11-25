@@ -3,21 +3,27 @@ import { test } from 'node:test'
 import { createSession, createUser } from '../src/auth.ts'
 import { parseRepo, parseRobloxId, slugify } from '../src/projects.ts'
 import { fakeGithub } from './fake-github.ts'
+import { fakeRoblox } from './fake-roblox.ts'
 import { client, csrfOf, registerAndEnable } from './helpers.ts'
+import { connectRoblox } from './roblox-helpers.ts'
 
 type Client = ReturnType<typeof client>
 
-async function loggedIn(opts?: Parameters<typeof client>[0]) {
-  const c = client(opts)
+// Utilisateur connecte, avec un compte Roblox deja connecte (faux Roblox : groupes 123456 et 777 autorises).
+async function loggedIn(opts: Parameters<typeof client>[0] = {}) {
+  const rb = fakeRoblox()
+  const c = client({ roblox: rb.client, ...opts })
   await registerAndEnable(c)
   const csrf = csrfOf((await c.call('GET', '/projects')).text)
-  return { c, csrf }
+  await connectRoblox(c)
+  return { c, csrf, rb }
 }
 
 const projectIdFrom = (res: Response) => Number(/\/projects\/(\d+)/.exec(res.headers.get('location') ?? '')![1])
 
 async function newProject(c: Client, csrf: string, fields: Record<string, string> = {}) {
-  return c.call('POST', '/projects', { csrf, name: 'Steal Treasure', repoMode: 'none', ...fields })
+  const acc = c.db.prepare('SELECT id FROM roblox_accounts ORDER BY id LIMIT 1').get() as { id: number } | undefined
+  return c.call('POST', '/projects', { csrf, name: 'Steal Treasure', repoMode: 'none', robloxAccountId: String(acc?.id ?? ''), ...fields })
 }
 
 test('helpers de validation', () => {
@@ -160,11 +166,12 @@ test('experiences : identifiants invalides refuses', async () => {
 test('modification d\'un projet', async () => {
   const { c, csrf } = await loggedIn()
   const id = projectIdFrom((await newProject(c, csrf)).res)
-  const r = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure 2', groupId: '777', groupName: 'Studio', repo: 'acme/st2' })
+  const accountId = String((c.db.prepare('SELECT id FROM roblox_accounts').get() as { id: number }).id)
+  const r = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure 2', robloxAccountId: accountId, groupId: '777', groupName: 'Studio', repo: 'acme/st2' })
   assert.equal(r.res.status, 303)
   const row = c.db.prepare('SELECT name, slug, roblox_group_id, github_repo FROM projects WHERE id = ?').get(id) as Record<string, unknown>
   assert.deepEqual({ ...row }, { name: 'Steal Treasure 2', slug: 'steal-treasure', roblox_group_id: 777, github_repo: 'acme/st2' })
-  assert.equal((await c.call('POST', `/projects/${id}`, { csrf, name: 'X', groupId: 'zz' })).res.status, 400)
+  assert.equal((await c.call('POST', `/projects/${id}`, { csrf, name: 'X', robloxAccountId: accountId, groupId: 'zz' })).res.status, 400)
 })
 
 test('suppression : le nom doit etre saisi, les experiences partent avec', async () => {

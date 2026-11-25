@@ -22,9 +22,25 @@ Node 24+ (TypeScript execute directement, base SQLite integree `node:sqlite`). C
 - **Connexion** : e-mail + mot de passe, puis code A2F (ou code de secours). Un code TOTP ne peut servir qu'une fois (anti-rejeu).
 - **Deconnexion** : detruit la session cote serveur ; « Deconnecter tous les autres appareils » sur l'accueil.
 
+## Comptes Roblox
+
+Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte → Comptes Roblox* (OAuth 2.0 / Open Cloud, code d'autorisation + PKCE).
+Roblox demande de choisir le compte, puis les experiences et **groupes** que ce compte autorise.
+
+- **Configuration de l'instance** (une fois) : creer une application OAuth sur <https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab>
+  (compte verifie par piece d'identite), y declarer l'adresse de redirection `<PUBLIC_URL>/account/roblox/callback` (`http://localhost:3000/...` est
+  accepte pour les tests) et les portees, puis renseigner `ROBLOX_CLIENT_ID`, `ROBLOX_CLIENT_SECRET` (et `ROBLOX_OAUTH_SCOPES`, par defaut
+  `openid profile group:read universe-places:write`) dans `host/.env`. Une application en mode « prive » est limitee a 10 utilisateurs par Roblox.
+- **Jetons** : le jeton d'acces (15 min) et le jeton de rafraichissement (90 jours, **a usage unique**, renouvele a chaque rafraichissement) sont
+  chiffres en base, jamais affiches. Les rafraichissements simultanes d'un meme compte sont fusionnes ; si Roblox refuse (autorisation revoquee ou
+  expiree), le compte passe en « a reconnecter ».
+- **Securite du flux** : `state` aleatoire a usage unique, lie a l'utilisateur et a sa session, PKCE (S256), expiration 10 min.
+- Un compte utilise par un projet ne peut pas etre deconnecte ; deconnecter revoque le jeton chez Roblox.
+
 ## Projets
 
-Un projet = un **groupe Roblox** (identifiant + nom, facultatifs), un **depot GitHub** et des **experiences** :
+Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : il doit faire partie des
+groupes autorises par le jeton de ce compte, via `POST /oauth/v1/token/resources` ; le nom est rempli automatiquement), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 Les experiences se creent a la main sur Roblox (l'Open Cloud ne permet pas de les creer) puis s'enregistrent ici (identifiants d'univers et de place).
 

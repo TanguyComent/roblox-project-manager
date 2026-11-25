@@ -154,3 +154,11 @@ details.edit form { margin-top: 12px; }
   .row { flex-direction: column; align-items: flex-start; }
   .row-side { flex-wrap: wrap; }
 }
+
+/* --- comptes Roblox --- */
+.acct { align-items: flex-start; }
+.acct .row-main { gap: 3px; min-width: 0; }
+.acct-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+ul.hints { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 560px) { .acct { flex-direction: column; } .acct-actions { justify-content: flex-start; } }
