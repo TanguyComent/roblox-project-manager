@@ -55,19 +55,83 @@ test('jeton vide ou avec des espaces refuse sans appeler GitHub', async () => {
   assert.equal(gh.calls.length, 0)
 })
 
-test('reglages du template : enregistres, valides, preremplissent le formulaire projet', async () => {
+test('proprietaire des nouveaux depots : valide et enregistre', async () => {
   const { c, csrf } = await loggedIn(fakeGithub({ login: 'tanguy-dev' }))
   await c.call('POST', '/account/github', { csrf, token: 'tok' })
-  assert.equal((await c.call('POST', '/account/github/settings', { csrf, template: 'pas valide', owner: '' })).res.status, 400)
-  assert.equal((await c.call('POST', '/account/github/settings', { csrf, template: 'acme/tpl', owner: 'bad owner!' })).res.status, 400)
-  const ok = await c.call('POST', '/account/github/settings', { csrf, template: 'acme/roblox-ts-template', owner: 'my-org' })
-  assert.equal(ok.res.status, 303)
+  assert.equal((await c.call('POST', '/account/github/settings', { csrf, owner: 'bad owner!' })).res.status, 400)
+  assert.equal((await c.call('POST', '/account/github/settings', { csrf, owner: 'my-org' })).res.status, 303)
+  assert.match((await c.call('GET', '/projects/new')).text, /name="owner" value="my-org"/)
+})
+
+test('choix du template : liste des depots (templates d\'abord) puis branches', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  const step1 = await c.call('GET', '/account/github/template')
+  assert.equal(step1.res.status, 200)
+  const templates = step1.text.slice(step1.text.indexOf('marques'), step1.text.indexOf('Autres depots'))
+  assert.match(templates, /acme\/roblox-template/)
+  assert.match(templates, /acme\/old-template/)
+  assert.match(templates, /\(prive\)/)
+  assert.match(step1.text.slice(step1.text.indexOf('Autres depots')), /acme\/notes/)
+  assert.match(step1.text, /Choisis d'abord un depot|Choisis d&#39;abord un depot/)
+
+  const step2 = await c.call('GET', '/account/github/template?repo=acme/roblox-template')
+  assert.match(step2.text, /<option value="main" selected>main<\/option>/)
+  assert.match(step2.text, /<option value="v2">v2<\/option>/)
+  assert.match(step2.text, /<option value="legacy">legacy<\/option>/)
+  // un autre depot : sa branche par defaut est preselectionnee
+  assert.match((await c.call('GET', '/account/github/template?repo=acme/old-template')).text, /<option value="master" selected>master<\/option>/)
+})
+
+test('choix du template : enregistrement, preselection, prefill du formulaire projet', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  const save = await c.call('POST', '/account/github/template', { csrf, repo: 'acme/roblox-template', branch: 'v2' })
+  assert.equal(save.res.status, 303)
+  assert.equal(save.res.headers.get('location'), '/account?g=template')
+
+  const account = (await c.call('GET', '/account?g=template')).text
+  assert.match(account, /acme\/roblox-template/)
+  assert.match(account, /<code>v2<\/code>/)
+  assert.match(account, /Template par defaut enregistre/)
+  // la page de choix preselectionne le template et la branche enregistres
+  const picker = (await c.call('GET', '/account/github/template')).text
+  assert.match(picker, /<option value="acme\/roblox-template" selected>/)
+  assert.match(picker, /<option value="v2" selected>v2<\/option>/)
+  // le formulaire de projet est prerempli
   const form = (await c.call('GET', '/projects/new')).text
-  assert.match(form, /value="acme\/roblox-ts-template"/)
-  assert.match(form, /value="my-org"/)
-  // une reconnexion (nouveau jeton) garde les reglages
-  await c.call('POST', '/account/github', { csrf, token: 'tok2' })
-  assert.match((await c.call('GET', '/projects/new')).text, /value="acme\/roblox-ts-template"/)
+  assert.match(form, /name="template" value="acme\/roblox-template"/)
+  assert.match(form, /name="branch" value="v2"/)
+})
+
+test('choix du template : branche inconnue, depot invalide, erreur GitHub', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  const noBranch = await c.call('POST', '/account/github/template', { csrf, repo: 'acme/roblox-template', branch: 'inexistante' })
+  assert.equal(noBranch.res.status, 400)
+  assert.match(noBranch.text, /n(?:'|&#39;)existe pas/)
+  assert.equal((await c.call('POST', '/account/github/template', { csrf, repo: '../../etc', branch: 'main' })).res.status, 400)
+  const unknown = await c.call('POST', '/account/github/template', { csrf, repo: 'acme/introuvable', branch: 'main' })
+  assert.equal(unknown.res.status, 502)
+  assert.match(unknown.text, /depot introuvable/)
+  assert.equal((c.db.prepare('SELECT template_repo FROM github_connections').get() as { template_repo: string | null }).template_repo, null)
+  assert.equal((await c.call('POST', '/account/github/template', { csrf: 'faux', repo: 'acme/roblox-template', branch: 'main' })).res.status, 403)
+})
+
+test('retirer le template par defaut', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  await c.call('POST', '/account/github/template', { csrf, repo: 'acme/roblox-template', branch: 'main' })
+  assert.equal((await c.call('POST', '/account/github/template/clear', { csrf })).res.status, 303)
+  assert.match((await c.call('GET', '/account')).text, /Choisir un template/)
+  assert.match((await c.call('GET', '/projects/new')).text, /name="template" value=""/)
+})
+
+test('la page de choix exige GitHub connecte', async () => {
+  const { c } = await loggedIn()
+  const r = await c.call('GET', '/account/github/template')
+  assert.equal(r.res.status, 303)
+  assert.equal(r.res.headers.get('location'), '/account')
 })
 
 test('le proprietaire par defaut est le compte GitHub connecte', async () => {

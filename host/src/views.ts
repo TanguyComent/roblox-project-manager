@@ -155,7 +155,7 @@ ${body}`, { wide: true })
 }
 
 export interface GithubCardData {
-  connection: { login: string; template: string; owner: string } | null
+  connection: { login: string; template: string; branch: string; owner: string } | null
   error?: string
   notice?: string
 }
@@ -180,17 +180,18 @@ function githubCard(g: GithubCardData, csrf: string) {
     <div class="actions"><button class="${g.connection ? '' : 'primary'}" type="submit">${g.connection ? 'Mettre a jour le jeton' : 'Connecter GitHub'}</button></div>
   </form>`
   const settings = g.connection ? `
+  <div class="gh-settings">
+    <h3>Template par defaut</h3>
+    <p class="muted small">Copie pour chaque nouveau projet.</p>
+    ${g.connection.template
+      ? `<div class="exp"><div class="row-main"><strong>${esc(g.connection.template)}</strong><span class="muted">${g.connection.branch ? `branche <code>${esc(g.connection.branch)}</code>` : 'branche par defaut'}</span></div><a class="button" href="/account/github/template">Changer</a></div>`
+      : '<a class="button primary" href="/account/github/template">Choisir un template</a>'}
+  </div>
   <form method="post" action="/account/github/settings" autocomplete="off" class="gh-settings">
     ${csrfField(csrf)}
-    <h3>Template des nouveaux projets</h3>
-    <div class="two">
-      <label>Depot template
-        <input type="text" name="template" value="${esc(g.connection.template)}" placeholder="mon-compte/roblox-ts-template">
-      </label>
-      <label>Proprietaire des nouveaux depots
-        <input type="text" name="owner" value="${esc(g.connection.owner)}" placeholder="${esc(g.connection.login)}">
-      </label>
-    </div>
+    <label>Proprietaire des nouveaux depots <span class="hint">compte ou organisation, ${esc(g.connection.login)} par defaut</span>
+      <input type="text" name="owner" value="${esc(g.connection.owner)}" placeholder="${esc(g.connection.login)}">
+    </label>
     <div class="actions"><button class="primary" type="submit">Enregistrer</button></div>
   </form>
   <form method="post" action="/account/github/disconnect" class="inline">${csrfField(csrf)}<button class="ghost danger" type="submit">Deconnecter GitHub</button></form>` : ''

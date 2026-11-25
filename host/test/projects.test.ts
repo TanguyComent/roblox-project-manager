@@ -206,3 +206,79 @@ test('le nom du projet est echappe dans les pages', async () => {
   assert.doesNotMatch(page, /<img src=x/)
   assert.match(page, /&lt;img src=x/)
 })
+
+test('template : branche par defaut (ou vide) -> copie simple, sans toucher aux branches', async () => {
+  for (const branch of ['', 'main']) {
+    const gh = fakeGithub()
+    const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+    await connectGithub(c, csrf)
+    const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch, owner: 'acme' })
+    assert.equal(r.res.status, 303, `branche « ${branch} »`)
+    assert.equal(gh.generateBody().include_all_branches, false)
+    assert.ok(!gh.calls.some((x) => x.method === 'PATCH' || x.method === 'DELETE'))
+    assert.deepEqual(gh.repos.get('acme/steal-treasure')!.branches, ['main'])
+  }
+})
+
+test('template : une autre branche devient la branche principale du nouveau depot', async () => {
+  const gh = fakeGithub()
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch: 'v2', owner: 'acme' })
+  assert.equal(r.res.status, 303)
+  assert.equal(gh.generateBody().include_all_branches, true)
+  const created = gh.repos.get('acme/steal-treasure')!
+  assert.equal(created.default_branch, 'v2')
+  assert.deepEqual(created.branches, ['v2']) // main et legacy retirees du NOUVEAU depot
+  // le depot template, lui, n'est pas modifie
+  const tpl = gh.repos.get('acme/roblox-template')!
+  assert.equal(tpl.default_branch, 'main')
+  assert.deepEqual(tpl.branches, ['main', 'v2', 'legacy'])
+  assert.ok(gh.calls.every((x) => !(x.method !== 'GET' && x.url.includes('/repos/acme/roblox-template') && !x.url.endsWith('/generate'))))
+  // aucun avertissement
+  assert.doesNotMatch((await c.call('GET', `/projects/${projectIdFrom(r.res)}?n=created`)).text, /n(?:'|&#39;)a pas pu devenir/)
+})
+
+test('template : depot pas encore pret -> on attend que la branche apparaisse', async () => {
+  const gh = fakeGithub({ notReadyListings: 3 })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch: 'v2', owner: 'acme' })
+  assert.equal(r.res.status, 303)
+  assert.equal(gh.repos.get('acme/steal-treasure')!.default_branch, 'v2')
+})
+
+test('template : branche non applicable -> projet cree avec un avertissement visible une fois', async () => {
+  const gh = fakeGithub({ patchStatus: 403 })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch: 'v2', owner: 'acme' })
+  assert.equal(r.res.status, 303)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 1)
+  const id = projectIdFrom(r.res)
+  const first = (await c.call('GET', `/projects/${id}?n=created`)).text
+  assert.match(first, /Depot cree, mais la branche/)
+  assert.match(first, /github\.com\/acme\/steal-treasure/)
+  assert.doesNotMatch((await c.call('GET', `/projects/${id}`)).text, /Depot cree, mais la branche/)
+  // aucune branche n'est supprimee tant que la branche principale n'a pas change
+  assert.ok(!gh.calls.some((x) => x.method === 'DELETE'))
+})
+
+test('template : branche absente du template -> avertissement, rien de supprime', async () => {
+  const gh = fakeGithub()
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch: 'nope', owner: 'acme' })
+  assert.equal(r.res.status, 303)
+  assert.match((await c.call('GET', `/projects/${projectIdFrom(r.res)}?n=created`)).text, /n(?:'|&#39;)existe pas dans le template/)
+  assert.deepEqual(gh.repos.get('acme/steal-treasure')!.branches, ['main', 'v2', 'legacy'])
+})
+
+test('template : nom de branche invalide refuse', async () => {
+  const gh = fakeGithub()
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', branch: 'a b;rm -rf' })
+  assert.equal(r.res.status, 400)
+  assert.equal(gh.calls.filter((x) => x.url.endsWith('/generate')).length, 0)
+})

@@ -47,6 +47,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     return { a, f, project } as const
   }
 
+  const pendingWarnings = new Map<number, string>()
   const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf })
 
   // --- liste ----------------------------------------------------------------------------------------------------------------
@@ -60,7 +61,10 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   const newPage = (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
     html(c, newProjectPage({
       ...viewer(a), error, form, githubLogin: getConnection(db, a.user.id)?.login ?? null,
-      defaults: { template: getConnection(db, a.user.id)?.template_repo ?? '', owner: getConnection(db, a.user.id)?.default_owner ?? getConnection(db, a.user.id)?.login ?? '' },
+      defaults: (() => {
+        const gc = getConnection(db, a.user.id)
+        return { template: gc?.template_repo ?? '', branch: gc?.template_branch ?? '', owner: gc?.default_owner ?? gc?.login ?? '' }
+      })(),
     }), status)
 
   app.get('/projects/new', async (c) => {
@@ -77,7 +81,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const mode = (['template', 'existing', 'none'].includes(s('repoMode')) ? s('repoMode') : 'none') as 'template' | 'existing' | 'none'
     const values: NewProjectForm = {
       name: s('name').trim(), groupId: s('groupId').trim(), groupName: s('groupName').trim(), repoMode: mode,
-      template: s('template').trim(), owner: s('owner').trim(), isPrivate: s('isPrivate') === '1', existing: s('existing').trim(),
+      template: s('template').trim(), branch: s('branch').trim(), owner: s('owner').trim(), isPrivate: s('isPrivate') === '1', existing: s('existing').trim(),
     }
     const fail = (msg: string, status: Status = 400) => newPage(c, a, values, msg, status)
 
@@ -90,6 +94,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if ((values.groupName ?? '').length > 80) return fail('Le nom du groupe est trop long.')
 
     let githubRepo: string | null = null
+    let warning: string | undefined
     if (mode === 'existing') {
       githubRepo = parseRepo(values.existing ?? '')
       if (!githubRepo) return fail('Depot invalide : attendu « proprietaire/depot » ou une URL GitHub.')
@@ -98,12 +103,14 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
       if (!token) return fail("Connecte d'abord ton compte GitHub (page Compte) pour creer un depot depuis un template.")
       if (!/^[\w.-]+\/[\w.-]+$/.test(values.template ?? '')) return fail('Depot template invalide : attendu « proprietaire/depot ».')
       if (values.owner && !/^[A-Za-z0-9-]{1,39}$/.test(values.owner)) return fail('Proprietaire GitHub invalide.')
+      if (values.branch && !/^[\w./-]{1,200}$/.test(values.branch)) return fail('Nom de branche invalide.')
       try {
         const repo = await githubFor(token).createFromTemplate({
-          template: values.template!, name: slugify(values.name), owner: values.owner || undefined,
+          template: values.template!, branch: values.branch || undefined, name: slugify(values.name), owner: values.owner || undefined,
           description: `${values.name} (projet Roblox)`, isPrivate: values.isPrivate !== false,
         })
         githubRepo = repo.fullName
+        warning = repo.warning
       } catch (e) {
         const msg = e instanceof GithubError ? e.message : 'GitHub ne repond pas.'
         return fail(`Creation du depot impossible : ${msg}.`, 502)
@@ -111,14 +118,18 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     }
 
     const project = createProject(db, a.user.id, { name: values.name, groupId, groupName: values.groupName || null, githubRepo })
+    // l'avertissement (branche non appliquee) est garde le temps d'un affichage, sans passer par l'URL
+    if (warning) pendingWarnings.set(project.id, warning)
     return c.redirect(`/projects/${project.id}?n=created`, 303)
   })
+
+  const takeWarning = (id: number) => { const w = pendingWarnings.get(id); pendingWarnings.delete(id); return w }
 
   // --- detail ---------------------------------------------------------------------------------------------------------------
   const detail = (c: Context, a: Auth, project: Project, extra: { error?: string; experienceError?: string; notice?: string } = {}, status: Status = 200) =>
     html(c, projectPage({
       ...viewer(a), project, experiences: listExperiences(db, project.id),
-      notice: extra.notice ?? NOTICES[c.req.query('n') ?? ''], error: extra.error, experienceError: extra.experienceError,
+      notice: extra.notice ?? NOTICES[c.req.query('n') ?? ''], error: extra.error ?? takeWarning(project.id), experienceError: extra.experienceError,
     }), status)
 
   app.get('/projects/:id{[0-9]+}', async (c) => {

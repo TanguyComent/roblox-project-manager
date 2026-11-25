@@ -65,6 +65,8 @@ const MIGRATIONS = [
      default_owner TEXT,               -- compte ou organisation qui recevra les nouveaux depots (vide = login)
      created_at INTEGER NOT NULL
    );`,
+  // 4 : branche du depot template a utiliser
+  `ALTER TABLE github_connections ADD COLUMN template_branch TEXT;`,
 ]
 
 export function openDb(file?: string): Db {

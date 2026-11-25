@@ -33,10 +33,10 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
 export interface NewProjectForm {
   name?: string; groupId?: string; groupName?: string
   repoMode?: 'template' | 'existing' | 'none'
-  template?: string; owner?: string; isPrivate?: boolean; existing?: string
+  template?: string; branch?: string; owner?: string; isPrivate?: boolean; existing?: string
 }
 
-export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; githubLogin: string | null; defaults: { template: string; owner: string } }) {
+export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; githubLogin: string | null; defaults: { template: string; branch: string; owner: string } }) {
   const f = o.form
   const githubEnabled = !!o.githubLogin
   const mode = f.repoMode ?? (githubEnabled ? 'template' : 'none')
@@ -74,10 +74,14 @@ export function newProjectPage(o: Viewer & { error?: string; form: NewProjectFor
           <label>Depot template
             <input type="text" name="template" value="${esc(f.template ?? o.defaults.template)}" placeholder="mon-compte/roblox-ts-template">
           </label>
-          <label>Proprietaire du nouveau depot
-            <input type="text" name="owner" value="${esc(f.owner ?? o.defaults.owner)}" placeholder="mon-compte">
+          <label>Branche du template <span class="hint">vide = branche par defaut</span>
+            <input type="text" name="branch" value="${esc(f.branch ?? o.defaults.branch)}" placeholder="main">
           </label>
         </div>
+        <label>Proprietaire du nouveau depot
+          <input type="text" name="owner" value="${esc(f.owner ?? o.defaults.owner)}" placeholder="mon-compte">
+        </label>
+        <p class="muted small">Valeurs par defaut modifiables dans <a href="/account/github/template">Compte → GitHub</a>.</p>
         <label class="check"><input type="checkbox" name="isPrivate" value="1"${f.isPrivate === false ? '' : ' checked'}> Depot prive</label>
       </div>
       ${radio('existing', 'Lier un depot existant', 'Rien n\'est cree, on garde seulement le lien.')}

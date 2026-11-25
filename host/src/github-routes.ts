@@ -2,8 +2,9 @@
 import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
 import { RateLimiter } from './auth.ts'
-import { deleteConnection, getConnection, saveConnection, updateSettings } from './github-connection.ts'
+import { deleteConnection, getConnection, getToken, saveConnection, updateOwner, updateTemplate } from './github-connection.ts'
 import { GithubError, type GithubFactory } from './github.ts'
+import { templatePickerPage, type TemplatePickerData } from './github-template-view.ts'
 import { renderAccount } from './account-view.ts'
 import type { Db } from './db.ts'
 
@@ -58,12 +59,71 @@ export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
     if ('res' in g) return g.res
     const { a, f } = g
     if (!getConnection(db, a.user.id)) return c.redirect('/account', 303)
-    const template = f.s('template').trim()
     const owner = f.s('owner').trim()
-    if (template && !REPO.test(template)) return back(c, a, { githubError: 'Depot template invalide : attendu « proprietaire/depot ».' }, 400)
     if (owner && !OWNER.test(owner)) return back(c, a, { githubError: 'Proprietaire GitHub invalide.' }, 400)
-    updateSettings(db, a.user.id, { templateRepo: template || null, defaultOwner: owner || null })
+    updateOwner(db, a.user.id, owner || null)
     return c.redirect('/account?g=saved', 303)
+  })
+
+  // --- choix du template par defaut : depot, puis branche ------------------------------------------------------------------
+  const picker = async (c: Context, a: Auth, repoParam: string | undefined, error?: string, status: Status = 200) => {
+    const token = getToken(db, a.user.id)
+    const conn = getConnection(db, a.user.id)
+    if (!token || !conn) return c.redirect('/account', 303)
+    const client = githubFor(token)
+    const data: TemplatePickerData = {
+      repos: [], selected: null, branches: [], branch: null, error,
+      current: conn.template_repo ? { repo: conn.template_repo, branch: conn.template_branch ?? '' } : null,
+    }
+    try {
+      data.repos = await client.listRepos()
+      const wanted = repoParam && REPO.test(repoParam) ? repoParam : conn.template_repo
+      const repo = data.repos.find((r) => r.fullName.toLowerCase() === wanted?.toLowerCase())
+      if (repo) {
+        data.selected = repo.fullName
+        data.branches = await client.listBranches(repo.fullName)
+        // branche preselectionnee : celle deja enregistree pour ce depot, sinon la branche par defaut du depot
+        data.branch = conn.template_repo === repo.fullName && conn.template_branch && data.branches.includes(conn.template_branch)
+          ? conn.template_branch : data.branches.includes(repo.defaultBranch) ? repo.defaultBranch : (data.branches[0] ?? null)
+      }
+    } catch (e) {
+      data.error = `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`
+      status = 502
+    }
+    return html(c, templatePickerPage({ email: a.user.email, csrf: a.session.csrf, ...data }), status)
+  }
+
+  app.get('/account/github/template', async (c) => {
+    const a = requireFull(c)
+    if (a instanceof Response) return a
+    return picker(c, a, c.req.query('repo'))
+  })
+
+  app.post('/account/github/template', async (c) => {
+    const g = await guard(c)
+    if ('res' in g) return g.res
+    const { a, f } = g
+    const repo = f.s('repo').trim()
+    const branch = f.s('branch').trim()
+    const token = getToken(db, a.user.id)
+    if (!token) return c.redirect('/account', 303)
+    if (!REPO.test(repo) || !branch) return picker(c, a, repo, 'Choisis un depot et une branche.', 400)
+    try {
+      // verifie aupres de GitHub que le depot est accessible et que la branche existe
+      const branches = await githubFor(token).listBranches(repo)
+      if (!branches.includes(branch)) return picker(c, a, repo, `La branche « ${branch} » n'existe pas dans ${repo}.`, 400)
+    } catch (e) {
+      return picker(c, a, repo, `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`, 502)
+    }
+    updateTemplate(db, a.user.id, repo, branch)
+    return c.redirect('/account?g=template', 303)
+  })
+
+  app.post('/account/github/template/clear', async (c) => {
+    const g = await guard(c)
+    if ('res' in g) return g.res
+    updateTemplate(db, g.a.user.id, null, null)
+    return c.redirect('/account?g=template-cleared', 303)
   })
 
   app.post('/account/github/disconnect', async (c) => {

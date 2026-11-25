@@ -30,8 +30,13 @@ Les experiences se creent a la main sur Roblox (l'Open Cloud ne permet pas de le
 
 - **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`) avec **le compte
   GitHub de l'utilisateur** : chacun colle son propre jeton dans *Compte → GitHub* (jeton « fine-grained » : Administration + Contents en
-  ecriture ; verifie aupres de GitHub, chiffre en base, jamais reaffiche) et y definit son **template** et le proprietaire des nouveaux depots,
-  qui preremplissent le formulaire de creation. Rien de GitHub dans le `.env` : la configuration est par utilisateur.
+  ecriture ; verifie aupres de GitHub, chiffre en base, jamais reaffiche). Dans *Compte → GitHub → Template par defaut*, il choisit son
+  **depot template** dans la liste de ses depots (les depots marques « template » en premier) puis la **branche** du template ; le
+  proprietaire des nouveaux depots se regle au meme endroit. Ces valeurs preremplissent le formulaire de creation (modifiables par projet).
+  Rien de GitHub dans le `.env` : la configuration est par utilisateur.
+- **Branche du template** : GitHub ne copie que la branche par defaut d'un template. Pour une autre branche, le depot est genere avec toutes
+  les branches, la branche choisie devient la branche principale du **nouveau** depot et les autres y sont supprimees (le template n'est jamais
+  modifie). Si GitHub refuse (permission Administration manquante…), le projet est quand meme cree avec un avertissement.
 - Chaque projet appartient a un utilisateur : les autres ne le voient ni ne le modifient (404).
 - Supprimer un projet ne touche ni au depot GitHub ni aux experiences Roblox.
 
