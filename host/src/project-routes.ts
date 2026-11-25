@@ -9,7 +9,7 @@ import {
   slugify, updateExperiencePlace, updateProject, type ExperienceKind, type Project,
 } from './projects.ts'
 import { resolvePlace } from './place-choice.ts'
-import { checkGroupAccess, getAccount, listAccounts, listAuthorizedGroups, listKnownPlaces, manageableGroups, type RobloxAccount } from './roblox-accounts.ts'
+import { checkGroupAccess, getAccount, listAccounts, listAuthorizedGroups, listKnownPlaces, manageableGroups, ownerKey, type RobloxAccount } from './roblox-accounts.ts'
 import type { RobloxClient } from './roblox.ts'
 import { messagePage } from './views.ts'
 
@@ -75,10 +75,10 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   }
 
   // Places connues de chaque compte (lecture au mieux : 4 s au maximum, mise en cache 5 min) ; null = liste indisponible.
-  const placeChoices = async (userId: number, onlyAccountId?: number | null): Promise<PlacesByAccount[]> => {
+  const placeChoices = async (userId: number, onlyAccountId?: number | null, owner?: string): Promise<PlacesByAccount[]> => {
     const timeout = <T,>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000).unref())])
     const accounts = listAccounts(db, userId).filter((a) => a.status === 'ok' && (onlyAccountId == null || a.id === onlyAccountId))
-    return Promise.all(accounts.map(async (a) => ({ accountId: a.id, label: a.label, places: await timeout(listKnownPlaces(db, roblox, a)).catch(() => null) })))
+    return Promise.all(accounts.map(async (a) => ({ accountId: a.id, label: a.label, places: await timeout(listKnownPlaces(db, roblox, a).then((l) => (owner ? l.filter((p) => ownerKey(p.owner) === owner) : l))).catch(() => null) })))
   }
 
   const newPage = async (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
@@ -105,7 +105,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const values: NewProjectForm = {
       releaseKnown: s('releaseKnown').trim(), releaseUniverseId: s('releaseUniverseId').trim(), releasePlaceId: s('releasePlaceId').trim(),
       devKnown: s('devKnown').trim(), devUniverseId: s('devUniverseId').trim(), devPlaceId: s('devPlaceId').trim(),
-      name: s('name').trim(), robloxAccountId: s('robloxAccountId').trim(), groupId: s('groupId').trim(), groupName: s('groupName').trim(), repoMode: mode,
+      name: s('name').trim(), robloxAccountId: s('robloxAccountId').trim(), groupId: s('groupId').trim() || s('groupIdManual').trim(), groupIdManual: s('groupIdManual').trim(), repoMode: mode,
       template: s('template').trim(), branch: s('branch').trim(), owner: s('owner').trim(), isPrivate: s('isPrivate') === '1', existing: s('existing').trim(),
     }
     const fail = (msg: string, status: Status = 400) => newPage(c, a, values, msg, status)
@@ -118,22 +118,21 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if (!account) return fail('Choisis un compte Roblox parmi ceux que tu as connectes.')
     if (account.status !== 'ok') return fail(`La cle du compte Roblox « ${account.label} » n'est plus valide : mets-la a jour (page Compte).`)
     let groupId: number | null = null
-    let groupName = values.groupName || null
+    let groupName: string | null = null
     let groupWarning: string | undefined
     if (values.groupId) {
       groupId = parseRobloxId(values.groupId)
       if (groupId === null) return fail('Identifiant de groupe invalide (chiffres uniquement).')
-      if ((values.groupName ?? '').length > 80) return fail('Le nom du groupe est trop long.')
       const check = await checkGroupAccess(db, roblox, account, groupId)
       if (!check.ok) return fail(check.error, check.status)
-      groupName ||= check.name
+      groupName = check.name
       if (!check.verified) groupWarning = GROUP_UNVERIFIED
     }
 
     // places Release / Dev (facultatives) : verifiees avant de creer quoi que ce soit
-    const release = await resolvePlace(db, roblox, account, { known: values.releaseKnown ?? '', universeId: values.releaseUniverseId ?? '', placeId: values.releasePlaceId ?? '' }, 'Release')
+    const release = await resolvePlace(db, roblox, account, { known: values.releaseKnown ?? '', universeId: values.releaseUniverseId ?? '', placeId: values.releasePlaceId ?? '' }, 'Release', groupId)
     if (!release.ok) return fail(release.error, release.status)
-    const dev = await resolvePlace(db, roblox, account, { known: values.devKnown ?? '', universeId: values.devUniverseId ?? '', placeId: values.devPlaceId ?? '' }, 'Dev')
+    const dev = await resolvePlace(db, roblox, account, { known: values.devKnown ?? '', universeId: values.devUniverseId ?? '', placeId: values.devPlaceId ?? '' }, 'Dev', groupId)
     if (!dev.ok) return fail(dev.error, dev.status)
     if (release.place && dev.place && release.place.placeId === dev.place.placeId) return fail('La release et la dev ne peuvent pas etre la meme place.')
 
@@ -174,7 +173,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   // --- detail ---------------------------------------------------------------------------------------------------------------
   const detail = async (c: Context, a: Auth, project: Project, extra: { error?: string; experienceError?: string; notice?: string } = {}, status: Status = 200) =>
     html(c, projectPage({
-      ...viewer(a), project, experiences: listExperiences(db, project.id), accounts: await robloxChoices(a.user.id), places: await placeChoices(a.user.id, project.roblox_account_id ?? -1),
+      ...viewer(a), project, experiences: listExperiences(db, project.id), accounts: await robloxChoices(a.user.id), places: await placeChoices(a.user.id, project.roblox_account_id ?? -1, project.roblox_group_id ? `group:${project.roblox_group_id}` : 'user'),
       notice: extra.notice ?? NOTICES[c.req.query('n') ?? ''], error: extra.error ?? takeWarning(project.id), experienceError: extra.experienceError,
     }), status)
 
@@ -189,8 +188,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if ('res' in g) return g.res
     const { a, f, project } = g
     const name = f.s('name').trim()
-    const groupRaw = f.s('groupId').trim()
-    const groupName = f.s('groupName').trim()
+    const groupRaw = f.s('groupId').trim() || f.s('groupIdManual').trim()
     const repoRaw = f.s('repo').trim()
     const accountRaw = f.s('robloxAccountId').trim()
     if (!name || name.length > 60) return detail(c, a, project!, { error: 'Le nom doit faire entre 1 et 60 caracteres.' }, 400)
@@ -199,12 +197,11 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if (account.status !== 'ok') return detail(c, a, project!, { error: `La cle du compte Roblox « ${account.label} » n'est plus valide : mets-la a jour (page Compte).` }, 400)
     let groupId = groupRaw ? parseRobloxId(groupRaw) : null
     if (groupRaw && groupId === null) return detail(c, a, project!, { error: 'Identifiant de groupe invalide (chiffres uniquement).' }, 400)
-    if (groupName.length > 80) return detail(c, a, project!, { error: 'Le nom du groupe est trop long.' }, 400)
-    let resolvedName: string | null = groupName || null
+    let resolvedName: string | null = null
     if (groupId !== null) {
       const check = await checkGroupAccess(db, roblox, account, groupId)
       if (!check.ok) return detail(c, a, project!, { error: check.error }, check.status)
-      resolvedName ||= check.name
+      resolvedName = check.name
     }
     const githubRepo = repoRaw ? parseRepo(repoRaw) : null
     if (repoRaw && !githubRepo) return detail(c, a, project!, { error: 'Depot invalide : attendu « proprietaire/depot » ou une URL GitHub.' }, 400)
@@ -230,7 +227,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if ('res' in g) return g.res
     const { a, f, project } = g
     const kind = f.s('kind') as ExperienceKind
-    const r = await resolvePlace(db, roblox, accountOf(a, project!), { known: f.s('known'), universeId: f.s('universeId'), placeId: f.s('placeId') }, 'Place')
+    const r = await resolvePlace(db, roblox, accountOf(a, project!), { known: f.s('known'), universeId: f.s('universeId'), placeId: f.s('placeId') }, 'Place', project!.roblox_group_id)
     if (!r.ok) return detail(c, a, project!, { experienceError: r.error }, r.status)
     if (!r.place) return detail(c, a, project!, { experienceError: 'Choisis une place dans la liste ou saisis ses identifiants.' }, 400)
     const added = addExperience(db, project!.id, { kind, universeId: r.place.universeId, placeId: r.place.placeId, label: f.s('label') })
@@ -245,7 +242,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const { a, f, project } = g
     const eid = Number(c.req.param('eid'))
     if (!getExperience(db, project!.id, eid)) return detail(c, a, project!, { experienceError: 'Experience introuvable.' }, 404)
-    const r = await resolvePlace(db, roblox, accountOf(a, project!), { known: f.s('known'), universeId: f.s('universeId'), placeId: f.s('placeId') }, 'Place')
+    const r = await resolvePlace(db, roblox, accountOf(a, project!), { known: f.s('known'), universeId: f.s('universeId'), placeId: f.s('placeId') }, 'Place', project!.roblox_group_id)
     if (!r.ok) return detail(c, a, project!, { experienceError: r.error }, r.status)
     if (!r.place) return detail(c, a, project!, { experienceError: 'Choisis une place dans la liste ou saisis ses identifiants.' }, 400)
     const u = updateExperiencePlace(db, project!.id, eid, r.place.universeId, r.place.placeId)

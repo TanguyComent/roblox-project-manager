@@ -287,10 +287,13 @@ test('projet : le compte se choisit dans la liste, les comptes a cle invalide so
   assert.match(page, /<select name="robloxAccountId" required>/)
   assert.match(page, />Principal</)
   assert.match(page, />Secondaire</)
-  assert.match(page, /Groupes accessibles avec tes comptes/)
-  assert.match(page, /Boilr <code>123456<\/code>/)
-  assert.doesNotMatch(page, /Studio <code>777<\/code>/) // role sans droit de gestion : non propose
+  // menu des groupes : ceux de chaque compte ou l'on peut gerer des experiences (le script masque ceux des autres comptes)
+  assert.match(page, /<select name="groupId">/)
+  assert.match(page, new RegExp(`<option value="123456" data-account="${a.accountId}">Boilr \\(Owner\\) · 123456</option>`))
+  assert.match(page, new RegExp(`<option value="888" data-account="${b.accountId}">Autre groupe \\(Dev\\) · 888</option>`))
+  assert.doesNotMatch(page, /value="777"/) // role sans droit de gestion : non propose
   assert.doesNotMatch(page, /Fan club/)
+  assert.doesNotMatch(page, /name="groupName"/) // le nom du groupe est rempli automatiquement
 
   assert.equal((await post(c, csrf, {})).res.status, 400) // pas de compte choisi
   const ok = await post(c, csrf, { robloxAccountId: String(b.accountId) })

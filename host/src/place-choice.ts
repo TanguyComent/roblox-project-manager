@@ -11,7 +11,7 @@ export type PlaceResult = { ok: true; place: PlaceSelection | null } | { ok: fal
 
 // Aucune place saisie = pas de place (null) : elles peuvent ne pas exister encore.
 export async function resolvePlace(
-  db: Db, roblox: RobloxClient, account: RobloxAccount | undefined, input: PlaceInput, what: string,
+  db: Db, roblox: RobloxClient, account: RobloxAccount | undefined, input: PlaceInput, what: string, groupId: number | null = null,
 ): Promise<PlaceResult> {
   let u = input.universeId.trim()
   let p = input.placeId.trim()
@@ -28,7 +28,7 @@ export async function resolvePlace(
   const placeId = parseRobloxId(p)
   if (universeId === null || placeId === null) return { ok: false, status: 400, error: `${what} : les identifiants doivent etre des nombres.` }
   if (!account) return { ok: true, place: { universeId, placeId, verified: false } } // projet sans compte Roblox rattache : rien a verifier
-  const check = await verifyPlace(db, roblox, account, universeId, placeId)
+  const check = await verifyPlace(db, roblox, account, universeId, placeId, groupId)
   if (!check.ok) return { ok: false, status: check.status, error: `${what} : ${check.error}` }
   return { ok: true, place: { universeId, placeId, verified: check.verified } }
 }

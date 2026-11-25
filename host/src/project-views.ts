@@ -32,7 +32,7 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
 }
 
 
-export interface AccountChoice { id: number; label: string; invalid: boolean; groups: { id: string; name: string | null }[] | null }
+export interface AccountChoice { id: number; label: string; invalid: boolean; groups: { id: string; name: string | null; role?: string | null }[] | null }
 
 // Liste deroulante des comptes Roblox connectes (un compte dont la cle est invalide n'est pas selectionnable).
 const accountSelect = (accounts: AccountChoice[], selected: string | number | undefined) => `
@@ -41,13 +41,25 @@ const accountSelect = (accounts: AccountChoice[], selected: string | number | un
       ${accounts.map((a) => `<option value="${a.id}"${String(selected) === String(a.id) ? ' selected' : ''}${a.invalid ? ' disabled' : ''}>${esc(a.label)}${a.invalid ? ' (cle invalide)' : ''}</option>`).join('')}
     </select>`
 
-// Aide au choix du groupe : ceux que chaque compte a autorises (le groupe saisi doit en faire partie).
-const groupHints = (accounts: AccountChoice[]) => {
-  const lines = accounts.filter((a) => a.groups && a.groups.length).map((a) =>
-    `<li><strong>${esc(a.label)}</strong> : ${a.groups!.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</li>`)
-  return lines.length
-    ? `<details><summary>Groupes accessibles avec tes comptes</summary><ul class="hints">${lines.join('')}</ul></details>`
-    : '<p class="muted small">Aucun groupe trouve pour ces comptes : saisis l\'identifiant du groupe.</p>'
+// Menu des groupes : pour chaque compte, ses groupes ou l'on peut gerer des experiences (le script masque ceux des autres comptes).
+// Sans JavaScript tout reste visible : le serveur verifie de toute facon que le groupe appartient bien au compte choisi.
+const groupSelect = (accounts: AccountChoice[], selected: string | number | null | undefined, manual = '') => {
+  const sel = selected ? String(selected) : ''
+  const options = accounts.flatMap((a) => (a.groups ?? []).map((g) =>
+    `<option value="${esc(g.id)}" data-account="${a.id}"${sel === g.id ? ' selected' : ''}>${esc(g.name ?? 'Groupe')}${g.role ? ` (${esc(g.role)})` : ''} · ${esc(g.id)}</option>`))
+  const unavailable = accounts.some((a) => a.groups === null && !a.invalid)
+  const none = options.length === 0
+  const known = accounts.some((a) => (a.groups ?? []).some((g) => g.id === sel))
+  return `<div class="picker">
+    <select name="groupId">
+      <option value="">Aucun groupe (experiences personnelles)</option>
+      ${options.join('')}
+    </select>
+    ${unavailable ? '<p class="muted small">Liste des groupes indisponible pour le moment : saisis l\'identifiant a la main.</p>'
+      : none ? '<p class="muted small">Aucun groupe ou ce compte peut gerer des experiences (ajoute la permission <code>legacy-group:manage</code> a la cle si c\'est une erreur).</p>' : ''}
+    <details${manual || (sel && !known) ? ' open' : ''}><summary>Saisir un identifiant de groupe a la main</summary>
+      <label>Identifiant du groupe <input type="text" name="groupIdManual" value="${esc(manual || (sel && !known ? sel : ''))}" inputmode="numeric" pattern="[0-9]*" placeholder="12345678"></label>
+    </details></div>`
 }
 
 export interface PlacesByAccount { accountId: number; label: string; /** null : la liste n'a pas pu etre lue */ places: KnownPlace[] | null }
@@ -58,9 +70,9 @@ const placeLabel = (p: KnownPlace) => `${p.universeName} › ${p.placeName}${p.i
 function placePicker(names: { known: string; universeId: string; placeId: string }, groups: PlacesByAccount[], v: { known?: string; universeId?: string; placeId?: string } = {}, emptyLabel = '— Aucune pour l\'instant —') {
   const withPlaces = groups.filter((g) => g.places && g.places.length)
   const unavailable = groups.some((g) => g.places === null)
-  const select = `<select name="${names.known}">
+  const select = `<select name="${names.known}" data-place-select>
       <option value="">${emptyLabel}</option>
-      ${withPlaces.map((g) => `<optgroup label="${esc(g.label)}">${g.places!.map((p) => { const val = `${p.universeId}:${p.placeId}`; return `<option value="${val}"${v.known === val ? ' selected' : ''}>${esc(placeLabel(p))}</option>` }).join('')}</optgroup>`).join('')}
+      ${withPlaces.map((g) => `<optgroup label="${esc(g.label)}">${g.places!.map((p) => { const val = `${p.universeId}:${p.placeId}`; return `<option value="${val}" data-account="${g.accountId}" data-owner="${p.owner?.type === 'Group' ? `group:${esc(p.owner.id)}` : 'user'}"${v.known === val ? ' selected' : ''}>${esc(placeLabel(p))}</option>` }).join('')}</optgroup>`).join('')}
     </select>`
   const note = unavailable ? '<p class="muted small">Liste des places indisponible pour le moment : saisis les identifiants.</p>'
     : withPlaces.length === 0 ? '<p class="muted small">Aucune place publique connue pour ce compte (les experiences privees ne sont pas listees) : saisis les identifiants.</p>' : ''
@@ -75,7 +87,7 @@ function placePicker(names: { known: string; universeId: string; placeId: string
 
 export interface NewProjectForm {
   releaseKnown?: string; releaseUniverseId?: string; releasePlaceId?: string; devKnown?: string; devUniverseId?: string; devPlaceId?: string
-  name?: string; robloxAccountId?: string; groupId?: string; groupName?: string
+  name?: string; robloxAccountId?: string; groupId?: string; groupIdManual?: string
   repoMode?: 'template' | 'existing' | 'none'
   template?: string; branch?: string; owner?: string; isPrivate?: boolean; existing?: string
 }
@@ -93,7 +105,7 @@ export function newProjectPage(o: Viewer & { error?: string; form: NewProjectFor
 <section class="card">
   <h1>Nouveau projet</h1>
   ${alert(o.error)}
-  <form method="post" action="/projects" autocomplete="off">
+  <form method="post" action="/projects" autocomplete="off" data-cascade>
     ${csrfField(o.csrf)}
     <label>Nom du projet
       <input type="text" name="name" value="${esc(f.name ?? '')}" maxlength="60" required autofocus placeholder="Steal Treasure">
@@ -105,16 +117,8 @@ export function newProjectPage(o: Viewer & { error?: string; form: NewProjectFor
       </label>` : '<div class="alert error" role="note">Aucun compte Roblox connecte. <a href="/account">Connecte-en un dans la page Compte</a> pour creer un projet.</div>'}
     </fieldset>
     <fieldset>
-      <legend>Groupe Roblox <span class="hint">facultatif, doit etre accessible via le compte choisi</span></legend>
-      ${groupHints(o.accounts)}
-      <div class="two">
-        <label>Identifiant du groupe
-          <input type="text" name="groupId" value="${esc(f.groupId ?? '')}" inputmode="numeric" pattern="[0-9]*" placeholder="12345678">
-        </label>
-        <label>Nom du groupe
-          <input type="text" name="groupName" value="${esc(f.groupName ?? '')}" maxlength="80" placeholder="rempli automatiquement">
-        </label>
-      </div>
+      <legend>Groupe Roblox <span class="hint">facultatif : seuls les groupes ou le compte choisi peut gerer des experiences</span></legend>
+      ${groupSelect(o.accounts, f.groupId, f.groupIdManual)}
     </fieldset>
     <fieldset>
       <legend>Places Roblox <span class="hint">facultatif : elles peuvent ne pas exister encore, tu pourras les renseigner plus tard dans la page du projet</span></legend>
@@ -202,15 +206,11 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
   </dl>
   <details class="edit">
     <summary>Modifier le projet</summary>
-    <form method="post" action="/projects/${p.id}" autocomplete="off">
+    <form method="post" action="/projects/${p.id}" autocomplete="off" data-cascade>
       ${csrfField(o.csrf)}
       <label>Nom <input type="text" name="name" value="${esc(p.name)}" maxlength="60" required></label>
       <label>Compte Roblox ${accountSelect(o.accounts, p.roblox_account_id ?? undefined)}</label>
-      ${groupHints(o.accounts)}
-      <div class="two">
-        <label>Identifiant du groupe <input type="text" name="groupId" value="${p.roblox_group_id ?? ''}" inputmode="numeric" pattern="[0-9]*"></label>
-        <label>Nom du groupe <input type="text" name="groupName" value="${esc(p.roblox_group_name ?? '')}" maxlength="80"></label>
-      </div>
+      <div class="field"><span class="label">Groupe Roblox</span>${groupSelect(o.accounts, p.roblox_group_id, '')}</div>
       <label>Depot GitHub <input type="text" name="repo" value="${esc(p.github_repo ?? '')}" placeholder="proprietaire/depot"></label>
       <div class="actions"><button class="primary" type="submit">Enregistrer</button></div>
     </form>

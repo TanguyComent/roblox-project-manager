@@ -52,6 +52,11 @@ automatiquement. Les groupes sans droit de gestion sont **ecartes** des listes (
 places : absents). La page Compte a un **« Diagnostic des groupes »** qui montre, groupe par groupe, ce que Roblox a repondu), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 
+- **Formulaire en cascade** : *compte Roblox → groupe → places*. Le **groupe** se choisit dans un **menu** (les groupes ou le compte choisi peut gerer des experiences, ou
+  « Aucun groupe (experiences personnelles) ») ; une saisie manuelle reste possible si la liste est indisponible. Les **places** proposees sont celles du compte **et du
+  groupe choisis** (sans groupe : les experiences personnelles). Le filtrage en direct est fait par un petit script (`public/app.js`, servi par le site, CSP `script-src 'self'`,
+  aucun script en ligne) ; sans JavaScript tout reste visible, et le **serveur verifie dans tous les cas** que le groupe appartient au compte et que l'experience appartient au
+  groupe du projet (quand Roblox indique son proprietaire). Le nom du groupe est celui de Roblox (plus de champ a remplir).
 - **Places** : a la creation, la Release et la Dev se choisissent dans la liste des **places connues** du compte, ou par identifiants saisis a la main ;
   elles sont **facultatives** (les places peuvent ne pas exister encore) et se renseignent ou se **changent** plus tard depuis la page du projet
   (« Changer la place »). Chaque place est **verifiee chez Roblox avec la cle du compte** (l'experience existe, la place en fait partie : « introuvable » est

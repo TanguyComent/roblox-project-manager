@@ -22,7 +22,7 @@ import { projectRoutes } from './project-routes.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
 const COOKIE = config.secureCookies ? '__Host-sid' : 'sid'
-const CSS_PATH = join(import.meta.dirname, '..', 'public', 'app.css')
+const PUBLIC_DIR = join(import.meta.dirname, '..', 'public')
 
 export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
@@ -50,7 +50,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   // --- en-tetes de securite -------------------------------------------------------------------------------------------------
   app.use('*', async (c, next) => {
     await next()
-    c.header('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'same-origin')
     c.header('X-Frame-Options', 'DENY')
@@ -114,13 +114,15 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   const signupOpen = () => config.allowSignup || countUsers(db) === 0
 
   // --- pages ------------------------------------------------------------------------------------------------------------------
-  // Feuille de style : relue a chaque requete en dehors de la production (modification visible sans redemarrer), revalidee par ETag.
-  app.get('/static/app.css', (c) => {
-    const css = readFileSync(CSS_PATH)
-    const etag = `"${sha256(css.toString('latin1')).slice(0, 16)}"`
+  // Fichiers statiques (feuille de style, script) : relus a chaque requete (modification visible sans redemarrer), revalides par ETag.
+  const asset = (name: string, type: string) => (c: Context) => {
+    const body = readFileSync(join(PUBLIC_DIR, name))
+    const etag = `"${sha256(body.toString('latin1')).slice(0, 16)}"`
     if (c.req.header('if-none-match') === etag) return c.body(null, 304, { ETag: etag, 'Cache-Control': 'no-cache' })
-    return c.body(css, 200, { 'Content-Type': 'text/css; charset=utf-8', ETag: etag, 'Cache-Control': 'no-cache' })
-  })
+    return c.body(body, 200, { 'Content-Type': `${type}; charset=utf-8`, ETag: etag, 'Cache-Control': 'no-cache' })
+  }
+  app.get('/static/app.css', asset('app.css', 'text/css'))
+  app.get('/static/app.js', asset('app.js', 'text/javascript'))
   app.get('/healthz', (c) => c.json({ ok: true }))
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))

@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import { config } from './config.ts'
 
 // Version de la feuille de style (date de modification) : l'adresse change des qu'elle change, donc pas de cache perime.
-const CSS_FILE = join(import.meta.dirname, '..', 'public', 'app.css')
-const cssVersion = () => { try { return Math.floor(statSync(CSS_FILE).mtimeMs) } catch { return 0 } }
+const fileVersion = (name: string) => { try { return Math.floor(statSync(join(import.meta.dirname, '..', 'public', name)).mtimeMs) } catch { return 0 } }
 
 export const esc = (s: unknown) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -20,7 +19,8 @@ export function layout(title: string, body: string, opts: { wide?: boolean } = {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>${esc(title)} · ${esc(config.appName)}</title>
-<link rel="stylesheet" href="/static/app.css?v=${cssVersion()}">
+<link rel="stylesheet" href="/static/app.css?v=${fileVersion('app.css')}">
+<script src="/static/app.js?v=${fileVersion('app.js')}" defer></script>
 </head>
 <body>
 <main class="shell${opts.wide ? ' wide' : ''}">

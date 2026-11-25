@@ -265,7 +265,13 @@ export async function checkGroupAccess(db: Db, client: RobloxClient, account: Ro
 }
 
 // --- places --------------------------------------------------------------------------------------------------------------------------
-export interface KnownPlace { universeId: string; universeName: string; placeId: string; placeName: string; isRoot: boolean }
+export interface KnownPlace {
+  universeId: string; universeName: string; placeId: string; placeName: string; isRoot: boolean
+  /** Proprietaire de l'experience : un groupe ou un utilisateur (null : inconnu). */
+  owner: { type: 'User' | 'Group'; id: string } | null
+}
+/** Cle de filtrage d'un proprietaire : « group:123 » pour un groupe, « user » pour une experience personnelle. */
+export const ownerKey = (o: { type: 'User' | 'Group'; id: string } | null) => (o?.type === 'Group' ? `group:${o.id}` : 'user')
 
 // Places que le site connait pour ce compte : les experiences nommees par la cle (restriction par experience), les experiences PUBLIQUES de
 // son proprietaire et de ses groupes. Les experiences privees ne sont pas listables par l'API : il reste la saisie des identifiants (verifies).
@@ -274,23 +280,24 @@ export async function listKnownPlaces(db: Db, client: RobloxClient, account: Rob
   if (!opts.fresh && cached && now() - cached.at < CACHE_MS) return cached.value
   const key = usableKey(db, account)
 
-  const universes = new Map<string, { name: string; rootPlaceId: string | null }>()
-  const add = (id: string, name: string, root: string | null) => { if (universes.size < 40 && !universes.has(id)) universes.set(id, { name, rootPlaceId: root }) }
+  type Owner = { type: 'User' | 'Group'; id: string } | null
+  const universes = new Map<string, { name: string; rootPlaceId: string | null; owner: Owner }>()
+  const add = (id: string, name: string, root: string | null, owner: Owner) => { if (universes.size < 40 && !universes.has(id)) universes.set(id, { name, rootPlaceId: root, owner }) }
 
   const explicit = [...new Set(account.scopes.flatMap((s) => s.universeIds).filter((id) => /^\d+$/.test(id)))]
   await Promise.all(explicit.slice(0, 20).map(async (id) => {
     const u = await client.getUniverse(key, id)
-    if (u.kind === 'found') add(id, u.value.name, u.value.rootPlaceId)
+    if (u.kind === 'found') add(id, u.value.name, u.value.rootPlaceId, u.value.owner)
   }))
-  for (const g of await client.listPublicGames('User', account.roblox_user_id)) add(g.universeId, g.name, g.rootPlaceId)
+  for (const g of await client.listPublicGames('User', account.roblox_user_id)) add(g.universeId, g.name, g.rootPlaceId, g.owner)
   const groups = await listAuthorizedGroups(db, client, account, { fresh: opts.fresh }).catch(() => [] as AuthorizedGroup[])
-  for (const grp of manageableGroups(groups).slice(0, MAX_GROUPS)) for (const g of await client.listPublicGames('Group', grp.id)) add(g.universeId, g.name, g.rootPlaceId)
+  for (const grp of manageableGroups(groups).slice(0, MAX_GROUPS)) for (const g of await client.listPublicGames('Group', grp.id)) add(g.universeId, g.name, g.rootPlaceId, g.owner)
 
   const places: KnownPlace[] = []
   await Promise.all([...universes].map(async ([universeId, u]) => {
     const list = await client.listUniversePlaces(universeId)
     if (u.rootPlaceId && !list.some((p) => p.placeId === u.rootPlaceId)) list.unshift({ placeId: u.rootPlaceId, name: u.name })
-    for (const p of list) places.push({ universeId, universeName: u.name, placeId: p.placeId, placeName: p.name, isRoot: p.placeId === u.rootPlaceId })
+    for (const p of list) places.push({ universeId, universeName: u.name, placeId: p.placeId, placeName: p.name, isRoot: p.placeId === u.rootPlaceId, owner: u.owner })
   }))
   places.sort((a, b) => a.universeName.localeCompare(b.universeName) || Number(b.isRoot) - Number(a.isRoot) || a.placeName.localeCompare(b.placeName))
   caches.places.set(account.id, { at: now(), value: places })
@@ -301,12 +308,17 @@ export type PlaceCheck = { ok: true; verified: boolean } | { ok: false; error: s
 
 // Verifie une place aupres de Roblox avec la cle du compte : l'experience existe-t-elle, la place en fait-elle partie ?
 // « Introuvable » est refuse ; « impossible a savoir » (la cle n'a pas la permission de lecture, panne) est accepte comme non verifie.
-export async function verifyPlace(db: Db, client: RobloxClient, account: RobloxAccount, universeId: number, placeId: number): Promise<PlaceCheck> {
+export async function verifyPlace(db: Db, client: RobloxClient, account: RobloxAccount, universeId: number, placeId: number, expectedGroupId: number | null = null): Promise<PlaceCheck> {
   let key: string
   try { key = usableKey(db, account) } catch (e) { return { ok: false, status: 400, error: (e as Error).message } }
   const u = await client.getUniverse(key, String(universeId))
   if (u.kind === 'missing') return { ok: false, status: 400, error: `L'experience ${universeId} est introuvable (ou inaccessible avec la cle de « ${account.label} »).` }
   if (u.kind === 'unknown') return { ok: true, verified: false }
+  // le projet est rattache a un groupe : l'experience doit appartenir a CE groupe (quand Roblox indique son proprietaire)
+  const owner = u.value.owner
+  if (expectedGroupId !== null && owner && !(owner.type === 'Group' && owner.id === String(expectedGroupId))) {
+    return { ok: false, status: 400, error: `L'experience « ${u.value.name} » n'appartient pas au groupe ${expectedGroupId} (${owner.type === 'Group' ? `elle appartient au groupe ${owner.id}` : 'elle est personnelle'}). Choisis une place du groupe du projet.` }
+  }
   const p = await client.getPlace(key, String(universeId), String(placeId))
   if (p.kind === 'missing') return { ok: false, status: 400, error: `La place ${placeId} n'appartient pas a l'experience ${universeId} (« ${u.value.name} »).` }
   return { ok: true, verified: true }
