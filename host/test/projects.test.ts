@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createSession, createUser } from '../src/auth.ts'
-import { createGithubClient } from '../src/github.ts'
 import { parseRepo, parseRobloxId, slugify } from '../src/projects.ts'
+import { fakeGithub } from './fake-github.ts'
 import { client, csrfOf, registerAndEnable } from './helpers.ts'
 
 type Client = ReturnType<typeof client>
@@ -80,45 +80,41 @@ test('validation du formulaire de creation', async () => {
   assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
 })
 
-test('creation depuis un template GitHub', async () => {
-  const calls: { url: string; init: RequestInit }[] = []
-  const github = createGithubClient({
-    token: 'ghp_test',
-    fetchImpl: (async (url: string, init: RequestInit) => {
-      calls.push({ url, init })
-      return new Response(JSON.stringify({ full_name: 'acme/steal-treasure', html_url: 'https://github.com/acme/steal-treasure' }), { status: 201 })
-    }) as unknown as typeof fetch,
-  })
-  const { c, csrf } = await loggedIn({ github })
+async function connectGithub(c: Client, csrf: string, token = 'ghp_test') {
+  return c.call('POST', '/account/github', { csrf, token })
+}
+
+test('creation depuis un template GitHub, avec le compte de l\'utilisateur', async () => {
+  const gh = fakeGithub({ login: 'acme' })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  assert.equal((await connectGithub(c, csrf)).res.status, 303)
+  gh.calls.length = 0
   const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', owner: 'acme', isPrivate: '1' })
   assert.equal(r.res.status, 303)
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].url, 'https://api.github.com/repos/acme/roblox-template/generate')
-  const sent = JSON.parse(calls[0].init.body as string)
+  assert.equal(gh.calls.length, 1)
+  assert.equal(gh.calls[0].url, 'https://api.github.com/repos/acme/roblox-template/generate')
+  const sent = JSON.parse(gh.calls[0].init.body as string)
   assert.deepEqual({ name: sent.name, owner: sent.owner, private: sent.private }, { name: 'steal-treasure', owner: 'acme', private: true })
-  assert.equal((calls[0].init.headers as Record<string, string>).authorization, 'Bearer ghp_test')
+  assert.equal((gh.calls[0].init.headers as Record<string, string>).authorization, 'Bearer ghp_test')
   assert.match((await c.call('GET', `/projects/${projectIdFrom(r.res)}`)).text, /github\.com\/acme\/steal-treasure/)
-  // le jeton n'apparait dans aucune page
-  assert.doesNotMatch((await c.call('GET', '/projects/new')).text, /ghp_test/)
 })
 
 test('echec GitHub : message clair, aucun projet cree', async () => {
-  const github = createGithubClient({
-    token: 't',
-    fetchImpl: (async () => new Response(JSON.stringify({ message: 'name already exists on this account' }), { status: 422 })) as unknown as typeof fetch,
-  })
-  const { c, csrf } = await loggedIn({ github })
+  const gh = fakeGithub({ generate: () => new Response(JSON.stringify({ message: 'name already exists on this account' }), { status: 422 }) })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
   const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template' })
   assert.equal(r.res.status, 502)
   assert.match(r.text, /nom deja utilise/)
   assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
 })
 
-test('template sans jeton GitHub : refuse proprement', async () => {
-  const { c, csrf } = await loggedIn({ github: createGithubClient({ token: '' }) })
+test('template sans GitHub connecte : renvoie vers la page Compte', async () => {
+  const { c, csrf } = await loggedIn({ githubFor: fakeGithub().githubFor })
   const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template' })
   assert.equal(r.res.status, 400)
-  assert.match(r.text, /GITHUB_TOKEN/)
+  assert.match(r.text, /Connecte d(?:'|&#39;)abord ton compte GitHub/)
+  assert.match((await c.call('GET', '/projects/new')).text, /Connecter GitHub/)
 })
 
 test('experiences : une release, un dev, des bancs d\'essai numerotes', async () => {

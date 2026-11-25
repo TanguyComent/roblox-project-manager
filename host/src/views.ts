@@ -154,13 +154,64 @@ export function appPage(title: string, v: Viewer, active: 'projects' | 'account'
 ${body}`, { wide: true })
 }
 
-export function accountPage(o: Viewer & { recoveryLeft: number; notice?: string }) {
+export interface GithubCardData {
+  connection: { login: string; template: string; owner: string } | null
+  error?: string
+  notice?: string
+}
+
+function githubCard(g: GithubCardData, csrf: string) {
+  const intro = g.connection
+    ? `<p class="muted">Connecte en tant que <strong>${esc(g.connection.login)}</strong> <span class="pill ok">Connecte</span></p>`
+    : `<p class="muted">Connecte ton compte GitHub pour creer automatiquement le depot de tes projets a partir de ton template. Le jeton est chiffre et ne quitte jamais le serveur.</p>`
+  const connect = `
+  <form method="post" action="/account/github" autocomplete="off">
+    ${csrfField(csrf)}
+    <label>${g.connection ? 'Remplacer le jeton' : "Jeton d'acces GitHub"}
+      <input type="password" name="token" autocomplete="off" spellcheck="false" placeholder="github_pat_…" required>
+    </label>
+    <details>
+      <summary>Quel jeton creer ?</summary>
+      <p class="muted small">Sur <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/personal-access-tokens/new</a> :
+      choisis le proprietaire (ton compte ou l'organisation), donne l'acces a <em>tous les depots</em>, puis les permissions <strong>Administration</strong>
+      et <strong>Contents</strong> en ecriture (Metadata en lecture). Un jeton classique avec la portee <code>repo</code> fonctionne aussi.
+      Si GitHub refuse la creation d'un depot, c'est en general une permission qui manque.</p>
+    </details>
+    <div class="actions"><button class="${g.connection ? '' : 'primary'}" type="submit">${g.connection ? 'Mettre a jour le jeton' : 'Connecter GitHub'}</button></div>
+  </form>`
+  const settings = g.connection ? `
+  <form method="post" action="/account/github/settings" autocomplete="off" class="gh-settings">
+    ${csrfField(csrf)}
+    <h3>Template des nouveaux projets</h3>
+    <div class="two">
+      <label>Depot template
+        <input type="text" name="template" value="${esc(g.connection.template)}" placeholder="mon-compte/roblox-ts-template">
+      </label>
+      <label>Proprietaire des nouveaux depots
+        <input type="text" name="owner" value="${esc(g.connection.owner)}" placeholder="${esc(g.connection.login)}">
+      </label>
+    </div>
+    <div class="actions"><button class="primary" type="submit">Enregistrer</button></div>
+  </form>
+  <form method="post" action="/account/github/disconnect" class="inline">${csrfField(csrf)}<button class="ghost danger" type="submit">Deconnecter GitHub</button></form>` : ''
+  return `
+<section class="card">
+  <h2>GitHub</h2>
+  ${alert(g.notice, 'ok')}${alert(g.error)}
+  ${intro}
+  ${g.connection ? settings : ''}
+  ${g.connection ? '<details class="edit"><summary>Changer de jeton</summary>' + connect + '</details>' : connect}
+</section>`
+}
+
+export function accountPage(o: Viewer & { recoveryLeft: number; notice?: string; github: GithubCardData }) {
   return appPage('Compte', o, 'account', `
 <section class="card">
   <h1>Compte</h1>
   ${alert(o.notice, 'ok')}
   <p class="muted">${esc(o.email)}</p>
 </section>
+${githubCard(o.github, o.csrf)}
 <section class="card">
   <h2>Securite</h2>
   <dl class="facts">

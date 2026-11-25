@@ -28,9 +28,10 @@ Un projet = un **groupe Roblox** (identifiant + nom, facultatifs), un **depot Gi
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 Les experiences se creent a la main sur Roblox (l'Open Cloud ne permet pas de les creer) puis s'enregistrent ici (identifiants d'univers et de place).
 
-- **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`).
-  Il faut un `GITHUB_TOKEN` (fine-grained : Administration + Contenu en ecriture sur le proprietaire cible, lecture sur le template) ;
-  `GITHUB_TEMPLATE_REPO` et `GITHUB_OWNER` preremplissent le formulaire. Le jeton reste cote serveur.
+- **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`) avec **le compte
+  GitHub de l'utilisateur** : chacun colle son propre jeton dans *Compte → GitHub* (jeton « fine-grained » : Administration + Contents en
+  ecriture ; verifie aupres de GitHub, chiffre en base, jamais reaffiche) et y definit son **template** et le proprietaire des nouveaux depots,
+  qui preremplissent le formulaire de creation. Rien de GitHub dans le `.env` : la configuration est par utilisateur.
 - Chaque projet appartient a un utilisateur : les autres ne le voient ni ne le modifient (404).
 - Supprimer un projet ne touche ni au depot GitHub ni aux experiences Roblox.
 

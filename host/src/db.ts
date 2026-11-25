@@ -56,6 +56,15 @@ const MIGRATIONS = [
    CREATE INDEX experiences_project ON experiences(project_id);
    -- une seule release et un seul dev par projet ; autant de bancs d'essai que l'on veut
    CREATE UNIQUE INDEX experiences_single_kind ON experiences(project_id, kind) WHERE kind IN ('release', 'dev');`,
+  // 3 : connexion GitHub par utilisateur (jeton chiffre) et son template par defaut
+  `CREATE TABLE github_connections (
+     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     login TEXT NOT NULL,
+     token_enc TEXT NOT NULL,          -- chiffre (AES-256-GCM), jamais renvoye au navigateur
+     template_repo TEXT,               -- "proprietaire/depot" utilise pour creer les projets
+     default_owner TEXT,               -- compte ou organisation qui recevra les nouveaux depots (vide = login)
+     created_at INTEGER NOT NULL
+   );`,
 ]
 
 export function openDb(file?: string): Db {

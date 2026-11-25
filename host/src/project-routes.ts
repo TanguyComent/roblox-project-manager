@@ -1,8 +1,8 @@
 import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
-import { config } from './config.ts'
 import type { Db } from './db.ts'
-import { GithubError, type GithubClient } from './github.ts'
+import { getConnection, getToken } from './github-connection.ts'
+import { GithubError, type GithubFactory } from './github.ts'
 import { newProjectPage, projectPage, projectsPage, type NewProjectForm } from './project-views.ts'
 import {
   addExperience, createProject, deleteExperience, deleteProject, getProject, listExperiences, listProjects, parseRepo, parseRobloxId,
@@ -15,7 +15,7 @@ type Auth = NonNullable<Context<Env>['var']['auth']>
 
 interface Ctx {
   db: Db
-  github: GithubClient
+  githubFor: GithubFactory
   html: (c: Context, body: string, status?: Status) => Response
   form: (c: Context) => Promise<{ s: (k: string) => string }>
   csrfOk: (c: Context, given: string) => boolean
@@ -27,7 +27,7 @@ const NOTICES: Record<string, string> = {
 }
 
 export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
-  const { db, github, html, form, csrfOk, requireFull } = ctx
+  const { db, githubFor, html, form, csrfOk, requireFull } = ctx
 
   // Garde commune : session complete + jeton CSRF (pour les POST) + projet appartenant a l'utilisateur.
   const guard = async (c: Context, opts: { post?: boolean; project?: boolean } = {}) => {
@@ -59,7 +59,8 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   // --- creation -------------------------------------------------------------------------------------------------------------
   const newPage = (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
     html(c, newProjectPage({
-      ...viewer(a), error, form, githubEnabled: github.enabled, defaults: { template: config.githubTemplate, owner: config.githubOwner },
+      ...viewer(a), error, form, githubLogin: getConnection(db, a.user.id)?.login ?? null,
+      defaults: { template: getConnection(db, a.user.id)?.template_repo ?? '', owner: getConnection(db, a.user.id)?.default_owner ?? getConnection(db, a.user.id)?.login ?? '' },
     }), status)
 
   app.get('/projects/new', async (c) => {
@@ -93,11 +94,12 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
       githubRepo = parseRepo(values.existing ?? '')
       if (!githubRepo) return fail('Depot invalide : attendu « proprietaire/depot » ou une URL GitHub.')
     } else if (mode === 'template') {
-      if (!github.enabled) return fail('La creation depuis un template demande un GITHUB_TOKEN sur le Host.')
+      const token = getToken(db, a.user.id)
+      if (!token) return fail("Connecte d'abord ton compte GitHub (page Compte) pour creer un depot depuis un template.")
       if (!/^[\w.-]+\/[\w.-]+$/.test(values.template ?? '')) return fail('Depot template invalide : attendu « proprietaire/depot ».')
       if (values.owner && !/^[A-Za-z0-9-]{1,39}$/.test(values.owner)) return fail('Proprietaire GitHub invalide.')
       try {
-        const repo = await github.createFromTemplate({
+        const repo = await githubFor(token).createFromTemplate({
           template: values.template!, name: slugify(values.name), owner: values.owner || undefined,
           description: `${values.name} (projet Roblox)`, isPrivate: values.isPrivate !== false,
         })
@@ -115,7 +117,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   // --- detail ---------------------------------------------------------------------------------------------------------------
   const detail = (c: Context, a: Auth, project: Project, extra: { error?: string; experienceError?: string; notice?: string } = {}, status: Status = 200) =>
     html(c, projectPage({
-      ...viewer(a), project, experiences: listExperiences(db, project.id), githubEnabled: github.enabled,
+      ...viewer(a), project, experiences: listExperiences(db, project.id),
       notice: extra.notice ?? NOTICES[c.req.query('n') ?? ''], error: extra.error, experienceError: extra.experienceError,
     }), status)
 

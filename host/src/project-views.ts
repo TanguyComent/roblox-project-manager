@@ -36,9 +36,10 @@ export interface NewProjectForm {
   template?: string; owner?: string; isPrivate?: boolean; existing?: string
 }
 
-export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; githubEnabled: boolean; defaults: { template: string; owner: string } }) {
+export function newProjectPage(o: Viewer & { error?: string; form: NewProjectForm; githubLogin: string | null; defaults: { template: string; owner: string } }) {
   const f = o.form
-  const mode = f.repoMode ?? (o.githubEnabled ? 'template' : 'none')
+  const githubEnabled = !!o.githubLogin
+  const mode = f.repoMode ?? (githubEnabled ? 'template' : 'none')
   const radio = (value: string, label: string, hint: string, disabled = false) => `
       <label class="choice${disabled ? ' disabled' : ''}">
         <input type="radio" name="repoMode" value="${value}"${mode === value ? ' checked' : ''}${disabled ? ' disabled' : ''}>
@@ -66,7 +67,8 @@ export function newProjectPage(o: Viewer & { error?: string; form: NewProjectFor
     </fieldset>
     <fieldset>
       <legend>Depot GitHub</legend>
-      ${radio('template', 'Creer depuis un template', o.githubEnabled ? 'Cree un nouveau depot a partir du template.' : 'Indisponible : aucun GITHUB_TOKEN configure sur le Host.', !o.githubEnabled)}
+      ${radio('template', 'Creer depuis un template', githubEnabled ? `Cree un depot a partir du template, avec ton compte GitHub ${esc(o.githubLogin)}.` : 'Indisponible : connecte ton compte GitHub dans la page Compte.', !githubEnabled)}
+      ${githubEnabled ? '' : '<p class="muted small"><a href="/account">Connecter GitHub</a></p>'}
       <div class="sub">
         <div class="two">
           <label>Depot template
@@ -113,7 +115,7 @@ function experienceSection(kind: ExperienceKind, items: Experience[], v: Viewer,
   </div>`
 }
 
-export function projectPage(o: Viewer & { project: Project; experiences: Experience[]; error?: string; notice?: string; experienceError?: string; githubEnabled: boolean }) {
+export function projectPage(o: Viewer & { project: Project; experiences: Experience[]; error?: string; notice?: string; experienceError?: string }) {
   const p = o.project
   const by = (k: ExperienceKind) => o.experiences.filter((e) => e.kind === k)
   const has = (k: ExperienceKind) => by(k).length > 0

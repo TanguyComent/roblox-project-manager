@@ -8,21 +8,24 @@ import QRCode from 'qrcode'
 import {
   MAX_MFA_ATTEMPTS, RateLimiter, beginTotpSetup, checkCredentials, confirmTotpSetup, countUsers, createSession, createUser,
   deleteSession, deleteUserSessions, findUserByEmail, getSession, isEmail, noteMfaAttempt, normalizeEmail, passwordProblem,
-  promoteSession, purgeExpiredSessions, remainingRecoveryCodes, verifySecondFactor, type Session, type User,
+  promoteSession, purgeExpiredSessions, verifySecondFactor, type Session, type User,
 } from './auth.ts'
 import { config } from './config.ts'
 import { otpauthUrl, safeEqual, sha256 } from './crypto.ts'
 import type { Db } from './db.ts'
-import { createGithubClient, type GithubClient } from './github.ts'
+import { renderAccount } from './account-view.ts'
+import { githubRoutes } from './github-routes.ts'
+import { createGithubClient, type GithubFactory } from './github.ts'
 import { projectRoutes } from './project-routes.ts'
-import { accountPage, loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
+import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
 const COOKIE = config.secureCookies ? '__Host-sid' : 'sid'
 const CSS_PATH = join(import.meta.dirname, '..', 'public', 'app.css')
 
 export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
-export function createApp(db: Db, opts: { github?: GithubClient } = {}) {
+// opts.githubFor : fabrique de client GitHub a partir du jeton d'un utilisateur (remplacable dans les tests).
+export function createApp(db: Db, opts: { githubFor?: GithubFactory } = {}) {
   const app = new Hono<Env>()
   // Tentatives de connexion : par adresse IP (large) et par e-mail (strict, uniquement les echecs).
   const ipLimit = new RateLimiter(30, 15 * 60_000)
@@ -124,18 +127,20 @@ export function createApp(db: Db, opts: { github?: GithubClient } = {}) {
     const a = auth(c)
     const redirect = home(c)
     if (redirect) return redirect
-    return html(c, accountPage({
-      email: a!.user.email, csrf: a!.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a!.user.id),
+    return html(c, renderAccount(db, a!, {
       notice: c.req.query('others') ? 'Les autres appareils ont ete deconnectes.' : undefined,
+      githubKey: c.req.query('g'),
     }))
   })
 
-  // Projets, experiences, depots GitHub (sessions completes uniquement)
-  projectRoutes(app, {
-    db, html, form, csrfOk,
-    github: opts.github ?? createGithubClient(),
-    requireFull: (c) => { const a = auth(c); return a && a.session.stage === 'full' ? a : (home(c) ?? c.redirect('/login')) },
-  })
+  // Projets, experiences, GitHub (sessions completes uniquement)
+  const githubFor: GithubFactory = opts.githubFor ?? ((token) => createGithubClient(token))
+  const shared = {
+    db, html, form, csrfOk, githubFor,
+    requireFull: (c: Context) => { const a = auth(c); return a && a.session.stage === 'full' ? a : (home(c) ?? c.redirect('/login')) },
+  }
+  githubRoutes(app, shared)
+  projectRoutes(app, shared)
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {
