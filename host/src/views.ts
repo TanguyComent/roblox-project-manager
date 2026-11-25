@@ -260,10 +260,13 @@ function githubCard(g: GithubCardData, csrf: string) {
     </label>
     <details>
       <summary>Quel jeton creer ?</summary>
-      <p class="muted small">Sur <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/personal-access-tokens/new</a> :
-      choisis le proprietaire (ton compte ou l'organisation), donne l'acces a <em>tous les depots</em>, puis les permissions <strong>Administration</strong>
-      et <strong>Contents</strong> en ecriture (Metadata en lecture). Un jeton classique avec la portee <code>repo</code> fonctionne aussi.
-      Si GitHub refuse la creation d'un depot, c'est en general une permission qui manque.</p>
+      <p class="muted small"><strong>Le plus simple : un jeton classique.</strong> Sur <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/tokens/new</a>,
+      coche la portee <code>repo</code> (et <code>read:org</code> si tu crees les depots dans une organisation). Il couvre tous tes depots, y compris les futurs.</p>
+      <p class="muted small"><strong>Jeton « fine-grained »</strong> (<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">github.com/settings/personal-access-tokens/new</a>) :
+      « Resource owner » = le compte ou l'organisation qui recevra les nouveaux depots ; « Repository access » = <em>All repositories</em> (ou au moins le template) ;
+      permissions <strong>Administration</strong> en ecriture et <strong>Contents</strong> en lecture/ecriture.</p>
+      <p class="muted small"><strong>Dans tous les cas</strong>, le depot choisi comme template doit etre marque <em>Template repository</em> (sur GitHub : Settings du depot).
+      Si la creation echoue avec « Not Found », le site te dit lequel de ces points pose probleme.</p>
     </details>
     <div class="actions"><button class="${g.connection ? '' : 'primary'}" type="submit">${g.connection ? 'Mettre a jour le jeton' : 'Connecter GitHub'}</button></div>
   </form>`

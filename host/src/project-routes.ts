@@ -147,16 +147,22 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
       if (!/^[\w.-]+\/[\w.-]+$/.test(values.template ?? '')) return fail('Depot template invalide : attendu « proprietaire/depot ».')
       if (values.owner && !/^[A-Za-z0-9-]{1,39}$/.test(values.owner)) return fail('Proprietaire GitHub invalide.')
       if (values.branch && !/^[\w./-]{1,200}$/.test(values.branch)) return fail('Nom de branche invalide.')
+      const gh = githubFor(token)
       try {
-        const repo = await githubFor(token).createFromTemplate({
+        const repo = await gh.createFromTemplate({
           template: values.template!, branch: values.branch || undefined, name: slugify(values.name), owner: values.owner || undefined,
           description: `${values.name} (projet Roblox)`, isPrivate: values.isPrivate !== false,
         })
         githubRepo = repo.fullName
         warning = repo.warning
       } catch (e) {
-        const msg = e instanceof GithubError ? e.message : 'GitHub ne repond pas.'
-        return fail(`Creation du depot impossible : ${msg}.`, 502)
+        let msg = e instanceof GithubError ? e.message : 'GitHub ne repond pas.'
+        // « 404 Not Found » ne dit pas lequel de plusieurs problemes se pose : on cherche lequel
+        if (e instanceof GithubError && e.status === 404) {
+          const why = await gh.diagnoseTemplate(values.template!, values.owner || undefined).catch(() => null)
+          if (why) msg = `${why} (reponse de GitHub : ${e.message})`
+        }
+        return fail(`Creation du depot impossible : ${msg}`.replace(/\.?$/, '.'), 502)
       }
     }
 

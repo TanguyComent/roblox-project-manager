@@ -66,9 +66,9 @@ export function fakeGithub(o: {
       if (method === 'PATCH') {
         if (o.patchStatus && o.patchStatus !== 200) return json({ message: 'Resource not accessible by personal access token' }, o.patchStatus)
         r.default_branch = JSON.parse(init.body as string).default_branch
-        return json({ default_branch: r.default_branch })
+        return json({ default_branch: r.default_branch, is_template: !!r.is_template })
       }
-      return json({ default_branch: r.default_branch })
+      return json({ default_branch: r.default_branch, is_template: !!r.is_template })
     }
     return json({ message: 'Not Found' }, 404)
   }) as unknown as typeof fetch

@@ -20,6 +20,8 @@ export interface GithubClient {
   listBranches(fullName: string): Promise<string[]>
   getDefaultBranch(fullName: string): Promise<string>
   createFromTemplate(o: CreateFromTemplateOptions): Promise<CreatedRepo>
+  /** Cherche pourquoi une creation depuis un template renvoie 404 (template invisible ? pas marque template ? droit de creation ?). */
+  diagnoseTemplate(template: string, owner?: string): Promise<string | null>
 }
 export type GithubFactory = (token: string) => GithubClient
 
@@ -42,7 +44,9 @@ const hint = (status: number) =>
 async function failure(res: Response): Promise<GithubError> {
   let detail = ''
   try { detail = ((await res.json()) as { message?: string }).message ?? '' } catch { /* corps non JSON */ }
-  return new GithubError(`${hint(res.status)}${detail ? ` (${detail})` : ''}`, res.status)
+  // GitHub indique, pour un jeton « fine-grained », les permissions que la route accepte
+  const accepted = res.headers?.get?.('x-accepted-github-permissions')
+  return new GithubError(`${hint(res.status)}${detail ? ` (${detail})` : ''}${accepted && res.status !== 422 ? ` — permissions acceptees par GitHub pour cette operation : ${accepted}` : ''}`, res.status)
 }
 
 const FULL_NAME = /^[\w.-]+\/[\w.-]+$/
@@ -99,6 +103,23 @@ export function createGithubClient(token: string, fetchImpl: Fetch = fetch, slee
 
     listBranches,
     getDefaultBranch,
+
+    // Explique un « 404 Not Found » : GitHub repond pareil quand le template est invisible pour le jeton, quand il n'est pas marque
+    // « template », ou quand le jeton n'a pas le droit de creer un depot chez ce proprietaire.
+    async diagnoseTemplate(template, owner) {
+      checkRepo(template)
+      const res = await call(`/repos/${template}`)
+      if (res.status === 404 || res.status === 403 || res.status === 401) {
+        return `Le depot template « ${template} » n'est pas visible avec ce jeton : verifie son nom, et que le jeton y a acces (Repository access : ce depot ou « All repositories », permission Contents en lecture).`
+      }
+      if (!res.ok) return null
+      const info = (await res.json()) as { is_template?: boolean; private?: boolean }
+      if (info.is_template === false) {
+        return `Le depot « ${template} » est lisible mais n'est PAS marque comme template : sur GitHub, ouvre ses Settings et coche « Template repository ».`
+      }
+      return `Le template « ${template} » est bien lisible et marque comme template : c'est la creation du nouveau depot${owner ? ` chez « ${owner} »` : ''} que GitHub refuse. Le jeton doit pouvoir creer des depots pour ce proprietaire : `
+        + `jeton « fine-grained » → « Resource owner » = ${owner ? `« ${owner} »` : 'ton compte'} et permission Administration en ecriture ; si ca ne suffit pas, utilise un jeton classique (portee « repo »).`
+    },
 
     async createFromTemplate({ template, branch, name, owner, description, isPrivate }) {
       checkRepo(template)

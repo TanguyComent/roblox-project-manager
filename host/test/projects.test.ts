@@ -289,3 +289,42 @@ test('template : nom de branche invalide refuse', async () => {
   assert.equal(r.res.status, 400)
   assert.equal(gh.calls.filter((x) => x.url.endsWith('/generate')).length, 0)
 })
+
+// --- GitHub : un « 404 Not Found » est explique ------------------------------------------------------------------------------------------
+const notFound = (extra: Record<string, string> = {}) => () => new Response(JSON.stringify({ message: 'Not Found' }), { status: 404, headers: extra })
+
+test('creation depuis un template refusee (404) : le template est lisible et marque -> la cause est le droit de creation', async () => {
+  const gh = fakeGithub({ generate: notFound({ 'x-accepted-github-permissions': 'administration=write; contents=read' }) })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', owner: 'acme' })
+  assert.equal(r.res.status, 502)
+  assert.match(r.text, /est bien lisible et marque comme template/)
+  assert.match(r.text, /creation du nouveau depot chez « acme »/)
+  assert.match(r.text, /Resource owner/)
+  assert.match(r.text, /permissions acceptees par GitHub pour cette operation : administration=write; contents=read/)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
+})
+
+test('creation depuis un template refusee (404) : depot non marque comme template', async () => {
+  const gh = fakeGithub({
+    generate: notFound(),
+    repos: [{ full_name: 'acme/plain-repo', default_branch: 'main', branches: ['main'] }],
+  })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/plain-repo' })
+  assert.equal(r.res.status, 502)
+  assert.match(r.text, /n(?:'|&#39;)est PAS marque comme template/)
+  assert.match(r.text, /Template repository/)
+})
+
+test('creation depuis un template refusee (404) : template invisible pour le jeton', async () => {
+  const gh = fakeGithub({ generate: notFound() })
+  const { c, csrf } = await loggedIn({ githubFor: gh.githubFor })
+  await connectGithub(c, csrf)
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/prive-introuvable' })
+  assert.equal(r.res.status, 502)
+  assert.match(r.text, /n(?:'|&#39;)est pas visible avec ce jeton/)
+  assert.match(r.text, /Repository access/)
+})
