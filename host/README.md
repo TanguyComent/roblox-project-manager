@@ -22,6 +22,20 @@ Node 24+ (TypeScript execute directement, base SQLite integree `node:sqlite`). C
 - **Connexion** : e-mail + mot de passe, puis code A2F (ou code de secours). Un code TOTP ne peut servir qu'une fois (anti-rejeu).
 - **Deconnexion** : detruit la session cote serveur ; « Deconnecter tous les autres appareils » sur l'accueil.
 
+## Projets
+
+Un projet = un **groupe Roblox** (identifiant + nom, facultatifs), un **depot GitHub** et des **experiences** :
+une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
+Les experiences se creent a la main sur Roblox (l'Open Cloud ne permet pas de les creer) puis s'enregistrent ici (identifiants d'univers et de place).
+
+- **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`).
+  Il faut un `GITHUB_TOKEN` (fine-grained : Administration + Contenu en ecriture sur le proprietaire cible, lecture sur le template) ;
+  `GITHUB_TEMPLATE_REPO` et `GITHUB_OWNER` preremplissent le formulaire. Le jeton reste cote serveur.
+- Chaque projet appartient a un utilisateur : les autres ne le voient ni ne le modifient (404).
+- Supprimer un projet ne touche ni au depot GitHub ni aux experiences Roblox.
+
+Pages : `/projects`, `/projects/new`, `/projects/:id`, `/account`.
+
 ## Securite
 
 - Mots de passe : scrypt (N=2^15) ; secrets A2F chiffres en AES-256-GCM (cle dans `DATA_DIR/secret.key` ou `HOST_SECRET_KEY`).
@@ -33,5 +47,6 @@ Node 24+ (TypeScript execute directement, base SQLite integree `node:sqlite`). C
 
 ## A venir
 
-Recuperation de compte (si le telephone et les codes de secours sont perdus : pour l'instant il faut passer par la base), changement de mot de passe,
+Worker (execution des agents, file de taches, routines), comptes IA, personnalisation du depot apres creation depuis le template
+(nom, groupe, identifiants de places), partage d'un projet entre utilisateurs. Recuperation de compte (si le telephone et les codes de secours sont perdus : pour l'instant il faut passer par la base), changement de mot de passe,
 envoi d'e-mails, gestion de plusieurs utilisateurs.

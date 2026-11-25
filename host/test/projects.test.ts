@@ -1,0 +1,212 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { createSession, createUser } from '../src/auth.ts'
+import { createGithubClient } from '../src/github.ts'
+import { parseRepo, parseRobloxId, slugify } from '../src/projects.ts'
+import { client, csrfOf, registerAndEnable } from './helpers.ts'
+
+type Client = ReturnType<typeof client>
+
+async function loggedIn(opts?: Parameters<typeof client>[0]) {
+  const c = client(opts)
+  await registerAndEnable(c)
+  const csrf = csrfOf((await c.call('GET', '/projects')).text)
+  return { c, csrf }
+}
+
+const projectIdFrom = (res: Response) => Number(/\/projects\/(\d+)/.exec(res.headers.get('location') ?? '')![1])
+
+async function newProject(c: Client, csrf: string, fields: Record<string, string> = {}) {
+  return c.call('POST', '/projects', { csrf, name: 'Steal Treasure', repoMode: 'none', ...fields })
+}
+
+test('helpers de validation', () => {
+  assert.equal(slugify('Steal Treasure!'), 'steal-treasure')
+  assert.equal(slugify('Épée & Bouclier'), 'epee-bouclier')
+  assert.equal(slugify('***'), 'projet')
+  assert.equal(parseRobloxId('123456'), 123456)
+  assert.equal(parseRobloxId('12 3'), null)
+  assert.equal(parseRobloxId('0'), null)
+  assert.equal(parseRobloxId('99999999999999999'), null)
+  assert.equal(parseRepo('https://github.com/TanguyComent/my-repo.git'), 'TanguyComent/my-repo')
+  assert.equal(parseRepo('foo/bar'), 'foo/bar')
+  assert.equal(parseRepo('pas un depot'), null)
+  assert.equal(parseRepo('../../etc/passwd'), null)
+})
+
+test('les pages projets exigent une session complete', async () => {
+  const c = client()
+  for (const path of ['/projects', '/projects/new', '/projects/1']) {
+    const r = await c.call('GET', path)
+    assert.equal(r.res.status, 302, path)
+    assert.equal(r.res.headers.get('location'), '/login', path)
+  }
+})
+
+test('liste vide, creation, detail', async () => {
+  const { c, csrf } = await loggedIn()
+  assert.match((await c.call('GET', '/projects')).text, /Aucun projet/)
+  const r = await newProject(c, csrf, { groupId: '123456', groupName: 'Boilr', repoMode: 'existing', existing: 'https://github.com/acme/steal-treasure' })
+  assert.equal(r.res.status, 303)
+  const id = projectIdFrom(r.res)
+  const detail = await c.call('GET', `/projects/${id}?n=created`)
+  assert.equal(detail.res.status, 200)
+  assert.match(detail.text, /Steal Treasure/)
+  assert.match(detail.text, /Boilr · groupe 123456/)
+  assert.match(detail.text, /github\.com\/acme\/steal-treasure/)
+  assert.match(detail.text, /Projet cree/)
+  const list = await c.call('GET', '/projects')
+  assert.match(list.text, /Steal Treasure/)
+  assert.match(list.text, /0 experience/)
+})
+
+test('deux projets du meme nom recoivent des identifiants distincts', async () => {
+  const { c, csrf } = await loggedIn()
+  await newProject(c, csrf)
+  await newProject(c, csrf)
+  const slugs = (c.db.prepare('SELECT slug FROM projects ORDER BY id').all() as { slug: string }[]).map((r) => r.slug)
+  assert.deepEqual(slugs, ['steal-treasure', 'steal-treasure-2'])
+})
+
+test('validation du formulaire de creation', async () => {
+  const { c, csrf } = await loggedIn()
+  assert.equal((await newProject(c, csrf, { name: '   ' })).res.status, 400)
+  assert.equal((await newProject(c, csrf, { name: 'x'.repeat(61) })).res.status, 400)
+  const badGroup = await newProject(c, csrf, { groupId: 'abc' })
+  assert.equal(badGroup.res.status, 400)
+  assert.match(badGroup.text, /groupe invalide/)
+  assert.equal((await newProject(c, csrf, { repoMode: 'existing', existing: 'nimporte quoi' })).res.status, 400)
+  assert.equal((await c.call('POST', '/projects', { csrf: 'faux', name: 'X' })).res.status, 403)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
+})
+
+test('creation depuis un template GitHub', async () => {
+  const calls: { url: string; init: RequestInit }[] = []
+  const github = createGithubClient({
+    token: 'ghp_test',
+    fetchImpl: (async (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      return new Response(JSON.stringify({ full_name: 'acme/steal-treasure', html_url: 'https://github.com/acme/steal-treasure' }), { status: 201 })
+    }) as unknown as typeof fetch,
+  })
+  const { c, csrf } = await loggedIn({ github })
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template', owner: 'acme', isPrivate: '1' })
+  assert.equal(r.res.status, 303)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://api.github.com/repos/acme/roblox-template/generate')
+  const sent = JSON.parse(calls[0].init.body as string)
+  assert.deepEqual({ name: sent.name, owner: sent.owner, private: sent.private }, { name: 'steal-treasure', owner: 'acme', private: true })
+  assert.equal((calls[0].init.headers as Record<string, string>).authorization, 'Bearer ghp_test')
+  assert.match((await c.call('GET', `/projects/${projectIdFrom(r.res)}`)).text, /github\.com\/acme\/steal-treasure/)
+  // le jeton n'apparait dans aucune page
+  assert.doesNotMatch((await c.call('GET', '/projects/new')).text, /ghp_test/)
+})
+
+test('echec GitHub : message clair, aucun projet cree', async () => {
+  const github = createGithubClient({
+    token: 't',
+    fetchImpl: (async () => new Response(JSON.stringify({ message: 'name already exists on this account' }), { status: 422 })) as unknown as typeof fetch,
+  })
+  const { c, csrf } = await loggedIn({ github })
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template' })
+  assert.equal(r.res.status, 502)
+  assert.match(r.text, /nom deja utilise/)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
+})
+
+test('template sans jeton GitHub : refuse proprement', async () => {
+  const { c, csrf } = await loggedIn({ github: createGithubClient({ token: '' }) })
+  const r = await newProject(c, csrf, { repoMode: 'template', template: 'acme/roblox-template' })
+  assert.equal(r.res.status, 400)
+  assert.match(r.text, /GITHUB_TOKEN/)
+})
+
+test('experiences : une release, un dev, des bancs d\'essai numerotes', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf)).res)
+  const add = (fields: Record<string, string>) => c.call('POST', `/projects/${id}/experiences`, { csrf, universeId: '1111', placeId: '2222', ...fields })
+
+  assert.equal((await add({ kind: 'release' })).res.status, 303)
+  const dupRelease = await add({ kind: 'release' })
+  assert.equal(dupRelease.res.status, 400)
+  assert.match(dupRelease.text, /deja une experience Release/)
+  assert.equal((await add({ kind: 'dev', placeId: '3333' })).res.status, 303)
+  for (let i = 0; i < 3; i++) await add({ kind: 'bench', placeId: String(4000 + i) })
+
+  const labels = (c.db.prepare(`SELECT label FROM experiences WHERE kind = 'bench' ORDER BY id`).all() as { label: string }[]).map((r) => r.label)
+  assert.deepEqual(labels, ['Bench 1', 'Bench 2', 'Bench 3'])
+
+  // un numero libere est reutilise
+  const second = c.db.prepare(`SELECT id FROM experiences WHERE label = 'Bench 2'`).get() as { id: number }
+  assert.equal((await c.call('POST', `/projects/${id}/experiences/${second.id}/delete`, { csrf })).res.status, 303)
+  await add({ kind: 'bench', placeId: '5000' })
+  assert.deepEqual((c.db.prepare(`SELECT label FROM experiences WHERE kind = 'bench' ORDER BY id`).all() as { label: string }[]).map((r) => r.label), ['Bench 1', 'Bench 3', 'Bench 2'])
+
+  const dupName = await add({ kind: 'bench', label: 'Bench 1' })
+  assert.equal(dupName.res.status, 400)
+
+  const page = await c.call('GET', `/projects/${id}`)
+  assert.match(page.text, /roblox\.com\/games\/3333/)
+  assert.match(page.text, /Release/)
+  assert.match((await c.call('GET', '/projects')).text, /5 experiences/)
+})
+
+test('experiences : identifiants invalides refuses', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf)).res)
+  const bad = await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: 'abc', placeId: '1' })
+  assert.equal(bad.res.status, 400)
+  const badKind = await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'nimporte', universeId: '1', placeId: '1' })
+  assert.equal(badKind.res.status, 400)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM experiences').get()!.n, 0)
+})
+
+test('modification d\'un projet', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf)).res)
+  const r = await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure 2', groupId: '777', groupName: 'Studio', repo: 'acme/st2' })
+  assert.equal(r.res.status, 303)
+  const row = c.db.prepare('SELECT name, slug, roblox_group_id, github_repo FROM projects WHERE id = ?').get(id) as Record<string, unknown>
+  assert.deepEqual({ ...row }, { name: 'Steal Treasure 2', slug: 'steal-treasure', roblox_group_id: 777, github_repo: 'acme/st2' })
+  assert.equal((await c.call('POST', `/projects/${id}`, { csrf, name: 'X', groupId: 'zz' })).res.status, 400)
+})
+
+test('suppression : le nom doit etre saisi, les experiences partent avec', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf)).res)
+  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '1', placeId: '2' })
+  const wrong = await c.call('POST', `/projects/${id}/delete`, { csrf, confirm: 'autre chose' })
+  assert.equal(wrong.res.status, 400)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 1)
+  const ok = await c.call('POST', `/projects/${id}/delete`, { csrf, confirm: 'Steal Treasure' })
+  assert.equal(ok.res.status, 303)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 0)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM experiences').get()!.n, 0)
+})
+
+test('un utilisateur ne voit ni ne modifie les projets d\'un autre', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf)).res)
+  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '1', placeId: '2' })
+
+  // deuxieme utilisateur, session complete creee directement
+  const other = await createUser(c.db, 'benoit@example.com', 'another long password')
+  const { token, session } = createSession(c.db, other.id, 'full')
+  c.setCookie(`sid=${token}`)
+
+  assert.doesNotMatch((await c.call('GET', '/projects')).text, /Steal Treasure/)
+  assert.equal((await c.call('GET', `/projects/${id}`)).res.status, 404)
+  assert.equal((await c.call('POST', `/projects/${id}`, { csrf: session.csrf, name: 'Pirate' })).res.status, 404)
+  assert.equal((await c.call('POST', `/projects/${id}/experiences`, { csrf: session.csrf, kind: 'bench', universeId: '1', placeId: '2' })).res.status, 404)
+  assert.equal((await c.call('POST', `/projects/${id}/delete`, { csrf: session.csrf, confirm: 'Steal Treasure' })).res.status, 404)
+  assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 1)
+  assert.equal(c.db.prepare('SELECT name FROM projects').get()!.name, 'Steal Treasure')
+})
+
+test('le nom du projet est echappe dans les pages', async () => {
+  const { c, csrf } = await loggedIn()
+  const id = projectIdFrom((await newProject(c, csrf, { name: '<img src=x onerror=alert(1)>' })).res)
+  const page = (await c.call('GET', `/projects/${id}`)).text
+  assert.doesNotMatch(page, /<img src=x/)
+  assert.match(page, /&lt;img src=x/)
+})

@@ -11,16 +11,18 @@ import {
   promoteSession, purgeExpiredSessions, remainingRecoveryCodes, verifySecondFactor, type Session, type User,
 } from './auth.ts'
 import { config } from './config.ts'
-import { safeEqual, otpauthUrl } from './crypto.ts'
+import { otpauthUrl, safeEqual, sha256 } from './crypto.ts'
 import type { Db } from './db.ts'
-import { homePage, loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
+import { createGithubClient, type GithubClient } from './github.ts'
+import { projectRoutes } from './project-routes.ts'
+import { accountPage, loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
 const COOKIE = config.secureCookies ? '__Host-sid' : 'sid'
-const CSS = readFileSync(join(import.meta.dirname, '..', 'public', 'app.css'))
+const CSS_PATH = join(import.meta.dirname, '..', 'public', 'app.css')
 
-type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
+export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
-export function createApp(db: Db) {
+export function createApp(db: Db, opts: { github?: GithubClient } = {}) {
   const app = new Hono<Env>()
   // Tentatives de connexion : par adresse IP (large) et par e-mail (strict, uniquement les echecs).
   const ipLimit = new RateLimiter(30, 15 * 60_000)
@@ -35,7 +37,7 @@ export function createApp(db: Db) {
     try { return getConnInfo(c).remote.address ?? 'unknown' } catch { return 'unknown' }
   }
 
-  const html = (c: Context, body: string, status: 200 | 400 | 401 | 403 | 429 = 200) => {
+  const html = (c: Context, body: string, status: 200 | 400 | 401 | 403 | 404 | 429 | 502 = 200) => {
     c.header('Cache-Control', 'no-store')
     return c.html(body, status)
   }
@@ -107,17 +109,32 @@ export function createApp(db: Db) {
   const signupOpen = () => config.allowSignup || countUsers(db) === 0
 
   // --- pages ------------------------------------------------------------------------------------------------------------------
-  app.get('/static/app.css', (c) => c.body(CSS, 200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'public, max-age=300' }))
+  // Feuille de style : relue a chaque requete en dehors de la production (modification visible sans redemarrer), revalidee par ETag.
+  app.get('/static/app.css', (c) => {
+    const css = readFileSync(CSS_PATH)
+    const etag = `"${sha256(css.toString('latin1')).slice(0, 16)}"`
+    if (c.req.header('if-none-match') === etag) return c.body(null, 304, { ETag: etag, 'Cache-Control': 'no-cache' })
+    return c.body(css, 200, { 'Content-Type': 'text/css; charset=utf-8', ETag: etag, 'Cache-Control': 'no-cache' })
+  })
   app.get('/healthz', (c) => c.json({ ok: true }))
 
-  app.get('/', (c) => {
+  app.get('/', (c) => home(c) ?? c.redirect('/projects'))
+
+  app.get('/account', (c) => {
     const a = auth(c)
     const redirect = home(c)
     if (redirect) return redirect
-    return html(c, homePage({
+    return html(c, accountPage({
       email: a!.user.email, csrf: a!.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a!.user.id),
       notice: c.req.query('others') ? 'Les autres appareils ont ete deconnectes.' : undefined,
     }))
+  })
+
+  // Projets, experiences, depots GitHub (sessions completes uniquement)
+  projectRoutes(app, {
+    db, html, form, csrfOk,
+    github: opts.github ?? createGithubClient(),
+    requireFull: (c) => { const a = auth(c); return a && a.session.stage === 'full' ? a : (home(c) ?? c.redirect('/login')) },
   })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
@@ -250,7 +267,7 @@ export function createApp(db: Db) {
     const { s } = await form(c)
     if (!csrfOk(c, s('csrf'))) return c.text('Jeton invalide', 403)
     deleteUserSessions(db, a.user.id, a.session.id)
-    return c.redirect('/?others=1', 303)
+    return c.redirect('/account?others=1', 303)
   })
 
   app.notFound((c) => c.text('Page introuvable', 404))

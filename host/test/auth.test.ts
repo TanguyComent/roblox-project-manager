@@ -1,41 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createApp } from '../src/app.ts'
-import { decryptSecret, totpAt, TOTP_STEP, base32Decode, base32Encode, verifyTotp } from '../src/crypto.ts'
-import { openDb } from '../src/db.ts'
-
-const ORIGIN = 'http://localhost:3000'
-
-function client() {
-  const db = openDb(':memory:')
-  const app = createApp(db)
-  let cookie = ''
-  const call = async (method: string, path: string, body?: Record<string, string>, headers: Record<string, string> = {}) => {
-    const res = await app.request(`${ORIGIN}${path}`, {
-      method,
-      headers: { host: 'localhost:3000', origin: ORIGIN, ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/x-www-form-urlencoded' } : {}), ...headers },
-      body: body ? new URLSearchParams(body).toString() : undefined,
-      redirect: 'manual',
-    })
-    const set = res.headers.get('set-cookie')
-    if (set) cookie = set.startsWith('sid=;') || /max-age=0/i.test(set) ? '' : set.split(';')[0]
-    return { res, text: await res.text() }
-  }
-  return { db, call, setCookie: (c: string) => { cookie = c }, getCookie: () => cookie }
-}
-
-const csrfOf = (html: string) => /name="csrf" value="([^"]+)"/.exec(html)![1]
-const secretOf = (db: ReturnType<typeof openDb>) =>
-  decryptSecret((db.prepare('SELECT totp_secret FROM users').get() as { totp_secret: string }).totp_secret)
-const step = () => Math.floor(Date.now() / 1000 / TOTP_STEP)
-
-async function registerAndEnable(c: ReturnType<typeof client>, email = 'me@example.com', password = 'correct horse battery') {
-  await c.call('POST', '/register', { email, password, confirm: password })
-  const setup = await c.call('GET', '/2fa/setup')
-  const done = await c.call('POST', '/2fa/setup', { csrf: csrfOf(setup.text), code: totpAt(secretOf(c.db), step()) })
-  const codes = [...done.text.matchAll(/<code>([a-z0-9]{5}-[a-z0-9]{5})<\/code>/g)].map((m) => m[1])
-  return { done, codes, password, email }
-}
+import { base32Decode, base32Encode, totpAt, verifyTotp } from '../src/crypto.ts'
+import { client, csrfOf, registerAndEnable, secretOf, step } from './helpers.ts'
 
 test('TOTP : vecteur RFC 6238 et base32', () => {
   const secret = base32Encode(Buffer.from('12345678901234567890'))
@@ -80,7 +46,8 @@ test('inscription -> A2F obligatoire -> codes de secours -> accueil', async () =
   const ok = await c.call('POST', '/2fa/setup', { csrf: csrfOf(setup.text), code: totpAt(secretOf(c.db), step()) })
   assert.equal(ok.res.status, 200)
   assert.equal([...ok.text.matchAll(/<code>/g)].length, 10)
-  const home = await c.call('GET', '/')
+  assert.equal((await c.call('GET', '/')).res.headers.get('location'), '/projects')
+  const home = await c.call('GET', '/account')
   assert.equal(home.res.status, 200)
   assert.match(home.text, /me@example\.com/)
   assert.match(home.text, /10 \/ 10/)
@@ -97,10 +64,10 @@ test('le secret A2F est chiffre en base', async () => {
 test('deconnexion : le cookie cesse de fonctionner, CSRF exige', async () => {
   const c = client()
   await registerAndEnable(c)
-  const home = await c.call('GET', '/')
+  const home = await c.call('GET', '/account')
   const cookie = c.getCookie()
   assert.equal((await c.call('POST', '/logout', { csrf: 'faux' })).res.status, 403)
-  assert.equal((await c.call('GET', '/')).res.status, 200)
+  assert.equal((await c.call('GET', '/account')).res.status, 200)
   const out = await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
   assert.equal(out.res.status, 303)
   assert.equal(out.res.headers.get('location'), '/login?out=1')
@@ -112,7 +79,7 @@ test('deconnexion : le cookie cesse de fonctionner, CSRF exige', async () => {
 test('connexion avec mot de passe + code A2F, le rejeu d\'un code est refuse', async () => {
   const c = client()
   const { password, email } = await registerAndEnable(c)
-  const home = await c.call('GET', '/')
+  const home = await c.call('GET', '/account')
   await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
 
   const wrong = await c.call('POST', '/login', { email, password: 'mauvais mot de passe' })
@@ -130,14 +97,14 @@ test('connexion avec mot de passe + code A2F, le rejeu d\'un code est refuse', a
   const good = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: totpAt(secretOf(c.db), step() + 1) })
   assert.equal(good.res.status, 302)
   assert.equal(good.res.headers.get('location'), '/')
-  assert.equal((await c.call('GET', '/')).res.status, 200)
+  assert.equal((await c.call('GET', '/account')).res.status, 200)
 })
 
 test('code de secours : valable une seule fois', async () => {
   const c = client()
   const { password, email, codes } = await registerAndEnable(c)
   for (let i = 0; i < 2; i++) {
-    const home = await c.call('GET', '/')
+    const home = await c.call('GET', '/account')
     if (i === 0) await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
     else await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
     await c.call('POST', '/login', { email, password })
@@ -145,7 +112,7 @@ test('code de secours : valable une seule fois', async () => {
     const r = await c.call('POST', '/login/2fa', { csrf: csrfOf(page.text), code: codes[0] })
     if (i === 0) {
       assert.equal(r.res.status, 302, 'premiere utilisation acceptee')
-      assert.match((await c.call('GET', '/')).text, /9 \/ 10/)
+      assert.match((await c.call('GET', '/account')).text, /9 \/ 10/)
     } else {
       assert.equal(r.res.status, 401, 'deuxieme utilisation refusee')
     }
@@ -155,7 +122,7 @@ test('code de secours : valable une seule fois', async () => {
 test('5 codes A2F faux detruisent la session', async () => {
   const c = client()
   const { password, email } = await registerAndEnable(c)
-  const home = await c.call('GET', '/')
+  const home = await c.call('GET', '/account')
   await c.call('POST', '/logout', { csrf: csrfOf(home.text) })
   await c.call('POST', '/login', { email, password })
   const page = await c.call('GET', '/login/2fa')

@@ -32,6 +32,30 @@ const MIGRATIONS = [
      user_agent TEXT
    );
    CREATE INDEX sessions_user ON sessions(user_id);`,
+  // 2 : projets et experiences Roblox
+  `CREATE TABLE projects (
+     id INTEGER PRIMARY KEY,
+     owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     slug TEXT NOT NULL,
+     roblox_group_id INTEGER,
+     roblox_group_name TEXT,
+     github_repo TEXT,                 -- "proprietaire/depot"
+     created_at INTEGER NOT NULL,
+     UNIQUE (owner_id, slug)
+   );
+   CREATE TABLE experiences (
+     id INTEGER PRIMARY KEY,
+     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     kind TEXT NOT NULL CHECK (kind IN ('release', 'dev', 'bench')),
+     label TEXT NOT NULL,
+     universe_id INTEGER NOT NULL,
+     place_id INTEGER NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX experiences_project ON experiences(project_id);
+   -- une seule release et un seul dev par projet ; autant de bancs d'essai que l'on veut
+   CREATE UNIQUE INDEX experiences_single_kind ON experiences(project_id, kind) WHERE kind IN ('release', 'dev');`,
 ]
 
 export function openDb(file?: string): Db {

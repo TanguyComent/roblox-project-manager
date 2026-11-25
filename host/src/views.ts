@@ -1,12 +1,18 @@
 // Pages HTML (rendues cote serveur). Tout texte dynamique passe par esc() ; aucun script en ligne (CSP stricte).
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { config } from './config.ts'
+
+// Version de la feuille de style (date de modification) : l'adresse change des qu'elle change, donc pas de cache perime.
+const CSS_FILE = join(import.meta.dirname, '..', 'public', 'app.css')
+const cssVersion = () => { try { return Math.floor(statSync(CSS_FILE).mtimeMs) } catch { return 0 } }
 
 export const esc = (s: unknown) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
 const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d8cff"/><stop offset="1" stop-color="#9b6dff"/></linearGradient></defs><path d="M9 11.5 16 8l7 3.5v9L16 24l-7-3.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M9 11.5 16 15l7-3.5M16 15v9" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`
 
-function layout(title: string, body: string, opts: { wide?: boolean } = {}) {
+export function layout(title: string, body: string, opts: { wide?: boolean } = {}) {
   return `<!doctype html>
 <html lang="fr">
 <head>
@@ -14,7 +20,7 @@ function layout(title: string, body: string, opts: { wide?: boolean } = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>${esc(title)} · ${esc(config.appName)}</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=${cssVersion()}">
 </head>
 <body>
 <main class="shell${opts.wide ? ' wide' : ''}">
@@ -24,9 +30,9 @@ ${body}
 </html>`
 }
 
-const brand = `<div class="brand">${LOGO}<span>${esc(config.appName)}</span></div>`
-const alert = (msg?: string, kind: 'error' | 'ok' = 'error') => (msg ? `<p class="alert ${kind}" role="alert">${esc(msg)}</p>` : '')
-const csrfField = (csrf?: string) => (csrf ? `<input type="hidden" name="csrf" value="${esc(csrf)}">` : '')
+export const brand = `<div class="brand">${LOGO}<span>${esc(config.appName)}</span></div>`
+export const alert = (msg?: string, kind: 'error' | 'ok' = 'error') => (msg ? `<p class="alert ${kind}" role="alert">${esc(msg)}</p>` : '')
+export const csrfField = (csrf?: string) => (csrf ? `<input type="hidden" name="csrf" value="${esc(csrf)}">` : '')
 
 export function loginPage(o: { error?: string; email?: string; canSignup: boolean; notice?: string }) {
   return layout('Connexion', `
@@ -131,19 +137,29 @@ ${brand}
 </section>`, { wide: true })
 }
 
-export function homePage(o: { email: string; csrf: string; recoveryLeft: number; notice?: string }) {
-  return layout('Accueil', `
+export interface Viewer { email: string; csrf: string }
+
+// Page d'une session complete : barre de navigation commune (Projets, Compte) + deconnexion.
+export function appPage(title: string, v: Viewer, active: 'projects' | 'account', body: string) {
+  const link = (href: string, label: string, key: string) => `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ''}>${label}</a>`
+  return layout(title, `
 <header class="topbar">
-  ${brand}
+  <a class="brand-link" href="/">${brand}</a>
+  <nav class="nav">${link('/projects', 'Projets', 'projects')}${link('/account', 'Compte', 'account')}</nav>
   <div class="who">
-    <span class="muted">${esc(o.email)}</span>
-    <form method="post" action="/logout" class="inline">${csrfField(o.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
+    <span class="muted">${esc(v.email)}</span>
+    <form method="post" action="/logout" class="inline">${csrfField(v.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
   </div>
 </header>
+${body}`, { wide: true })
+}
+
+export function accountPage(o: Viewer & { recoveryLeft: number; notice?: string }) {
+  return appPage('Compte', o, 'account', `
 <section class="card">
-  <h1>Bienvenue</h1>
+  <h1>Compte</h1>
   ${alert(o.notice, 'ok')}
-  <p class="muted">Ton compte est pret. Les projets arriveront ici.</p>
+  <p class="muted">${esc(o.email)}</p>
 </section>
 <section class="card">
   <h2>Securite</h2>
@@ -152,7 +168,7 @@ export function homePage(o: { email: string; csrf: string; recoveryLeft: number;
     <dt>Codes de secours restants</dt><dd>${o.recoveryLeft} / 10${o.recoveryLeft <= 2 ? ' <span class="pill warn">Bientot epuises</span>' : ''}</dd>
   </dl>
   <form method="post" action="/logout-all" class="inline">${csrfField(o.csrf)}<button class="ghost danger" type="submit">Deconnecter tous les autres appareils</button></form>
-</section>`, { wide: true })
+</section>`)
 }
 
 export function messagePage(title: string, text: string, status = 200) {
