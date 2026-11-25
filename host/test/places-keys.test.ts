@@ -43,6 +43,7 @@ test('places connues : les groupes sans droit de gestion sont ecartes (benefice 
   const ids = (places: Awaited<ReturnType<typeof listKnownPlaces>>) => [...new Set(places.map((p) => p.universeName))]
   assert.deepEqual(ids(await listKnownPlaces(c.db, rb.client, account())), ['Boilr Hub']) // « Fan Hub » (groupe Fan club) en est absent
   rb.state.hideRolePermissions = true
+  rb.state.canManageStatus = 403
   assert.deepEqual(ids(await listKnownPlaces(c.db, rb.client, account(), { fresh: true })).sort(), ['Boilr Hub', 'Fan Hub'])
 })
 

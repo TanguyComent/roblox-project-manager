@@ -53,7 +53,7 @@ const KEY_LIST: FakeKey[] = [
 export function fakeRoblox() {
   const keys = new Map(KEY_LIST.map((k) => [k.key, { ...k }]))
   const calls: { method: string; host: string; path: string; search: string; key?: string }[] = []
-  const state = { introspectStatus: 200, membershipsForbidden: false, universeForbidden: false, /** cle sans group:read : les permissions des roles sont masquees */ hideRolePermissions: false }
+  const state = { introspectStatus: 200, membershipsForbidden: false, universeForbidden: false, /** cle sans group:read : les permissions des roles sont masquees */ hideRolePermissions: false, /** statut de la liste « groupes que tu peux gerer » (403 : cle sans legacy-group:manage) */ canManageStatus: 200 }
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
   const user = (id: string) => USERS.find((u) => u.id === id)
   const canAccess = (userId: string, u: FakeUniverse) =>
@@ -112,6 +112,10 @@ export function fakeRoblox() {
       const g = user(k!.userId)?.groups.find((x) => x.id === m![1])
       if (!g || m[2] !== `${g.id}00`) return json({ message: 'not found' }, 404)
       return json({ path: `groups/${g.id}/roles/${m[2]}`, id: m[2], displayName: g.role, rank: g.manage ? 255 : 1, ...(state.hideRolePermissions ? {} : { permissions: { manageGroupUniverses: g.manage, viewWallPosts: true } }) })
+    }
+    if (u.pathname === '/legacy-develop/v1/user/groups/canmanage') {
+      if (state.canManageStatus !== 200) return json({ message: 'forbidden' }, state.canManageStatus)
+      return json({ data: (user(k!.userId)?.groups ?? []).filter((g) => g.manage).map((g) => ({ id: Number(g.id), name: g.name })) })
     }
     m = /^\/cloud\/v2\/universes\/(\d+)$/.exec(u.pathname)
     if (m) {

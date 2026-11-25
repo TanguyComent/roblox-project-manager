@@ -193,26 +193,38 @@ export async function listAuthorizedGroups(db: Db, client: RobloxClient, account
     byGroup.set(m.groupId, roles)
   }
 
+  // Source de verite : la liste des groupes que le compte peut gerer (permission legacy-group:manage sur la cle).
+  const manage = await client.listManageableGroups(key)
+  const manageIds = manage.kind === 'found' ? new Set(manage.value.map((g) => g.id)) : null
+  const manageNote = manage.kind === 'found'
+    ? null
+    : `liste « groupes que tu peux gerer » de Roblox indisponible (HTTP ${manage.kind === 'unknown' ? manage.status ?? '?' : '404'}) : ajoute la permission legacy-group:manage a la cle`
+
   const describe = async ([id, roleIds]: [string, Set<string>], index: number): Promise<AuthorizedGroup> => {
     const g = await client.getGroup(key, id)
     const group: AuthorizedGroup = { id, name: g.kind === 'found' ? g.value.name : null, role: null, canManage: null, diagnostic: [] }
+    if (manageIds) group.canManage = manageIds.has(id)
+    group.diagnostic.push(manageIds ? `liste « groupes que tu peux gerer » de Roblox : ${group.canManage ? 'present' : 'absent'}` : manageNote!)
     if (roleIds.size === 0) group.diagnostic.push('Roblox n\'a indique aucun role pour ce compte dans ce groupe.')
+    // les roles ne servent qu'a afficher le nom du role (et de repli si la liste « peut gerer » est indisponible)
+    if (manageIds && !group.canManage) return group
     if (index >= MAX_GROUPS_CHECKED) { group.diagnostic.push('Roles non lus (trop de groupes).'); return group }
     const ids = [...roleIds]
     const roles = await Promise.all(ids.map((r) => client.getRole(key, id, r)))
     roles.forEach((r, i) => {
       group.diagnostic.push(
         r.kind === 'found'
-          ? `role ${ids[i]} « ${r.value.name} » : ${r.value.permissions ? `${Object.keys(r.value.permissions).length} permissions lues, manageGroupUniverses = ${r.value.permissions.manageGroupUniverses ?? 'absente'}` : 'permissions ABSENTES de la reponse (la cle n\'a probablement pas group:read)'}`
+          ? `role ${ids[i]} « ${r.value.name} » : ${r.value.permissions ? `${Object.keys(r.value.permissions).length} permissions lues, manageGroupUniverses = ${r.value.permissions.manageGroupUniverses ?? 'absente'}` : `permissions absentes de la reponse (champs recus : ${r.value.fields.join(', ')})`}`
           : r.kind === 'missing' ? `role ${ids[i]} : introuvable (404)` : `role ${ids[i]} : lecture refusee ou impossible (HTTP ${r.status ?? '?'})`,
       )
     })
     const found = roles.flatMap((r) => (r.kind === 'found' ? [r.value] : []))
     const top = [...found].sort((x, y) => (y.rank ?? -1) - (x.rank ?? -1))[0]
     group.role = top?.name ?? null
-    const readable = found.filter((r) => r.permissions !== null)
-    // plusieurs roles : il suffit qu'un seul donne le droit
-    if (readable.length) group.canManage = readable.some((r) => r.permissions!.manageGroupUniverses === true)
+    if (!manageIds) { // repli : permissions des roles (plusieurs roles : il suffit qu'un seul donne le droit)
+      const readable = found.filter((r) => r.permissions !== null)
+      if (readable.length) group.canManage = readable.some((r) => r.permissions!.manageGroupUniverses === true)
+    }
     return group
   }
   const groups: AuthorizedGroup[] = []
@@ -243,7 +255,7 @@ export async function checkGroupAccess(db: Db, client: RobloxClient, account: Ro
       return { ok: false, status: 400, error: `Le compte Roblox « ${account.label} » n'est pas membre du groupe ${groupId}${label} : sa cle ne peut donc pas y acceder. Ajoute ce compte au groupe, ou choisis un autre compte.` }
     }
     if (found.canManage === false) {
-      return { ok: false, status: 400, error: `Le compte Roblox « ${account.label} » est membre du groupe ${groupId}${label} mais son role${found.role ? ` « ${found.role} »` : ''} ne permet pas de gerer les experiences du groupe. Choisis un compte qui en a le droit.` }
+      return { ok: false, status: 400, error: `Le compte Roblox « ${account.label} » est membre du groupe ${groupId}${label} mais ${found.role ? `son role « ${found.role} »` : 'son role'} ne lui permet pas de gerer les experiences du groupe. Choisis un compte qui en a le droit.` }
     }
     return { ok: true, name, verified: found.canManage === true }
   } catch (e) {

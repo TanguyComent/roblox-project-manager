@@ -44,10 +44,12 @@ Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte �
 ## Projets
 
 Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : le proprietaire de la cle doit en
-etre membre (`GET /cloud/v2/groups/-/memberships`) **et son role doit permettre de gerer les experiences du groupe** (permission `manageGroupUniverses`,
-lue via `GET /cloud/v2/groups/{id}/roles/{role}` — il faut pour cela la permission `group:read` sur la cle) ; le nom est rempli automatiquement ; si la cle ne
-permet pas de le lire, le groupe est accepte « non verifie » avec un avertissement). Les groupes rejoints sans droit de gestion sont **ecartes** des listes
-(page Compte : repliés sous « N autres groupes » ; formulaire de projet et liste de places : absents), un **depot GitHub** et des **experiences** :
+etre membre (`GET /cloud/v2/groups/-/memberships`) **et pouvoir y gerer des experiences** : le site lit la liste « groupes que tu peux gerer » de Roblox
+(`GET /legacy-develop/v1/user/groups/canmanage`, qui demande la permission **`legacy-group:manage`** sur la cle — la seule permission « legacy » utile ici).
+A defaut, il essaie de lire les permissions du role (`manageGroupUniverses`), mais Roblox ne les renvoie pas toujours (la reponse contient le nom du role et pas
+ses permissions, meme avec `group:read`) ; si rien n'est lisible, le groupe est accepte « non verifie » avec un avertissement. Le nom du groupe est rempli
+automatiquement. Les groupes sans droit de gestion sont **ecartes** des listes (page Compte : replies sous « N autres groupes » ; formulaire de projet et liste de
+places : absents). La page Compte a un **« Diagnostic des groupes »** qui montre, groupe par groupe, ce que Roblox a repondu), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 
 - **Places** : a la creation, la Release et la Dev se choisissent dans la liste des **places connues** du compte, ou par identifiants saisis a la main ;

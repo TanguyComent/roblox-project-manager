@@ -16,7 +16,7 @@ export interface UniverseInfo { universeId: string; name: string; rootPlaceId: s
 export interface PlaceInfo { placeId: string; name: string }
 export interface GroupMembership { groupId: string; /** Tous les roles du membre dans le groupe (un membre peut en cumuler plusieurs). */ roleIds: string[] }
 /** Un role de groupe ; `permissions` est null quand la cle n'a pas le droit de les lire (il faut alors la permission group:read). */
-export interface GroupRole { id: string; name: string; rank: number | null; permissions: Record<string, boolean> | null }
+export interface GroupRole { id: string; name: string; rank: number | null; permissions: Record<string, boolean> | null; /** champs presents dans la reponse (diagnostic) */ fields: string[] }
 
 /** Resultat d'une recherche qui peut etre « introuvable » ou « impossible a savoir » (cle sans la permission de lecture, panne...). */
 export type Lookup<T> = { kind: 'found'; value: T } | { kind: 'missing' } | { kind: 'unknown'; /** code HTTP de la reponse (0 : pas de reponse) */ status?: number }
@@ -35,6 +35,8 @@ export interface RobloxClient {
   /** Groupes dont le compte est membre. Leve RobloxError si la cle n'a pas le droit de le lire. */
   listMemberships(apiKey: string, userId: string): Promise<GroupMembership[]>
   getRole(apiKey: string, groupId: string, roleId: string): Promise<Lookup<GroupRole>>
+  /** Groupes ou le compte peut GERER des experiences (liste de Roblox ; demande la permission legacy-group:manage sur la cle). */
+  listManageableGroups(apiKey: string): Promise<Lookup<{ id: string; name: string | null }[]>>
   getUniverse(apiKey: string, universeId: string): Promise<Lookup<UniverseInfo>>
   /** Verifie qu'une place appartient bien a l'experience. */
   getPlace(apiKey: string, universeId: string, placeId: string): Promise<Lookup<PlaceInfo>>
@@ -132,7 +134,17 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
         const j = (await res.json()) as { displayName?: string; rank?: number; permissions?: Record<string, unknown> }
         const permissions = j.permissions && typeof j.permissions === 'object'
           ? Object.fromEntries(Object.entries(j.permissions).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> : null
-        return { kind: 'found', value: { id: roleId, name: j.displayName ?? `Role ${roleId}`, rank: typeof j.rank === 'number' ? j.rank : null, permissions } }
+        return { kind: 'found', value: { id: roleId, name: j.displayName ?? `Role ${roleId}`, rank: typeof j.rank === 'number' ? j.rank : null, permissions, fields: Object.keys(j) } }
+      } catch { return { kind: 'unknown', status: 0 } }
+    },
+
+    // « Groupes que l'utilisateur peut gerer » : l'ancienne API de developpement, exposee a Open Cloud sous le prefixe /legacy-develop.
+    async listManageableGroups(apiKey) {
+      try {
+        const res = await get(`${BASE}/legacy-develop/v1/user/groups/canmanage`, apiKey)
+        if (!res.ok) return { kind: 'unknown', status: res.status }
+        const j = (await res.json()) as { data?: { id?: number | string; name?: string }[] }
+        return { kind: 'found', value: (j.data ?? []).filter((g) => g.id !== undefined).map((g) => ({ id: String(g.id), name: g.name ?? null })) }
       } catch { return { kind: 'unknown', status: 0 } }
     },
 

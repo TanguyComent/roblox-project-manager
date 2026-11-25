@@ -52,7 +52,7 @@ test('connexion : la cle est verifiee, chiffree en base et jamais reaffichee', a
   assert.match(page, /Groupes ou gerer des experiences : Boilr \(Owner\) <code>123456<\/code><\/span>/)
   assert.match(page, /2 autres groupes \(role sans permission de gestion\)/)
   assert.match(page, /<details class="others">.*Studio <code>777<\/code>/s)
-  assert.doesNotMatch(page, /group:read<\/code> pour ne voir/) // les roles sont lisibles : pas de conseil
+  assert.doesNotMatch(page, /legacy-group:manage<\/code> \(liste des groupes/) // la liste « peut gerer » est disponible : pas de conseil
 })
 
 test('connexion : nom personnalise, plusieurs comptes, meme cle refusee deux fois', async () => {
@@ -220,7 +220,7 @@ test('groupes du compte : membres uniquement, avec leur role et leur droit de ge
   const userId = (c.db.prepare('SELECT user_id FROM roblox_accounts').get() as { user_id: number }).user_id
   const account = getAccount(c.db, userId, accountId!)!
   const groups = await listAuthorizedGroups(c.db, rb.client, account)
-  assert.deepEqual(groups.map((g) => `${g.id}:${g.name}:${g.role}:${g.canManage}`), ['123456:Boilr:Owner:true', '999:Fan club:Fan:false', '777:Studio:Membre:false'])
+  assert.deepEqual(groups.map((g) => `${g.id}:${g.name}:${g.role}:${g.canManage}`), ['123456:Boilr:Owner:true', '999:Fan club:null:false', '777:Studio:null:false'])
   const n = rb.calls.length
   await listAuthorizedGroups(c.db, rb.client, account)
   assert.equal(rb.calls.length, n)
@@ -244,23 +244,24 @@ test('acces a un groupe : membre -> ok (nom rempli) ; non membre ou inexistant -
   for (const id of [777, 999]) {
     const r = await checkGroupAccess(c.db, rb.client, account, id)
     assert.equal(r.ok, false, `groupe ${id}`)
-    assert.match((r as { error: string }).error, /ne permet pas de gerer les experiences du groupe/)
+    assert.match((r as { error: string }).error, /ne lui permet pas de gerer les experiences du groupe/)
   }
 
   rb.state.membershipsForbidden = true // la cle n'a pas le droit de lire les appartenances : on ne peut pas trancher
   assert.deepEqual(await checkGroupAccess(c.db, rb.client, account, 123456), { ok: true, name: 'Boilr', verified: false })
 })
 
-test('cle sans group:read : permissions des roles masquees -> groupes montres (benefice du doute) avec un conseil, acces « non verifie »', async () => {
+test('cle sans legacy-group:manage ni group:read : permissions des roles masquees -> groupes montres (benefice du doute) avec un conseil, acces « non verifie »', async () => {
   const { c, rb } = await setup()
   rb.state.hideRolePermissions = true
+  rb.state.canManageStatus = 403
   const { accountId } = await connectRoblox(c)
   const userId = (c.db.prepare('SELECT user_id FROM roblox_accounts').get() as { user_id: number }).user_id
   const account = getAccount(c.db, userId, accountId!)!
   assert.deepEqual((await listAuthorizedGroups(c.db, rb.client, account)).map((g) => g.canManage), [null, null, null])
   const page = (await c.call('GET', '/account')).text
   assert.match(page, /Studio \(Membre\) <code>777<\/code>/)
-  assert.match(page, /ajoute-lui la permission <code>group:read<\/code>/)
+  assert.match(page, /ajoute-lui la permission <code>legacy-group:manage<\/code>/)
   assert.deepEqual(await checkGroupAccess(c.db, rb.client, account, 777), { ok: true, name: 'Studio', verified: false })
 })
 
@@ -333,7 +334,7 @@ test('projet : le groupe doit etre un groupe dont le compte est membre', async (
   assert.equal((await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '999999' })).res.status, 400)
   const noRight = await post(c, csrf, { robloxAccountId: String(a.accountId), groupId: '777' }) // membre, mais role sans droit de gestion
   assert.equal(noRight.res.status, 400)
-  assert.match(noRight.text, /role « Membre » ne permet pas de gerer les experiences/)
+  assert.match(noRight.text, /ne lui permet pas de gerer les experiences du groupe/)
   assert.equal(projectCount(c), 2)
 })
 
@@ -390,16 +391,19 @@ test('diagnostic des groupes : montre ce que Roblox repond pour chaque role', as
   let page = (await c.call('GET', '/account')).text
   assert.match(page, /Diagnostic des groupes/)
   assert.match(page, /role 12345600 « Owner » : \d+ permissions lues, manageGroupUniverses = true/)
-  assert.match(page, /role 77700 « Membre » : \d+ permissions lues, manageGroupUniverses = false/)
+  assert.match(page, /liste « groupes que tu peux gerer » de Roblox : present/)
+  assert.match(page, /liste « groupes que tu peux gerer » de Roblox : absent/) // Studio, Fan club
   assert.match(page, /gestion des experiences : oui/)
 
   const hidden = fakeRoblox()
   hidden.state.hideRolePermissions = true
+  hidden.state.canManageStatus = 403
   const c2 = client({ roblox: hidden.client })
   await registerAndEnable(c2)
   await connectRoblox(c2)
   page = (await c2.call('GET', '/account')).text
-  assert.match(page, /permissions ABSENTES de la reponse/)
+  assert.match(page, /permissions absentes de la reponse \(champs recus : path, id, displayName, rank\)/)
+  assert.match(page, /indisponible \(HTTP 403\) : ajoute la permission legacy-group:manage/)
   assert.match(page, /gestion des experiences : inconnue/)
 
   const forbidden = fakeRoblox()
