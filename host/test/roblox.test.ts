@@ -44,7 +44,7 @@ test('connexion : redirection OAuth (PKCE), compte enregistre, jetons chiffres',
   assert.equal(q.get('code_challenge_method'), 'S256')
   assert.ok(q.get('code_challenge'))
   assert.equal(q.get('scope'), 'openid profile group:read')
-  assert.equal(q.get('prompt'), 'select_account')
+  assert.equal(q.get('prompt'), 'select_account consent')
 
   assert.equal(flow.back.res.status, 303)
   assert.equal(flow.back.res.headers.get('location'), '/account?r=connected')

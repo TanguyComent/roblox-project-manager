@@ -89,7 +89,7 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
       u.search = new URLSearchParams({
         client_id: cred().clientId ?? '', redirect_uri: redirectUri, scope: cred().scopes, response_type: 'code',
         state, code_challenge: codeChallenge, code_challenge_method: 'S256',
-        prompt: 'select_account', // permet de choisir un autre compte Roblox que celui deja ouvert dans le navigateur
+        prompt: 'select_account consent', // choisir le compte (pas forcement celui deja ouvert) ; l'ecran de consentement est obligatoire pour une application tierce
       }).toString()
       return u.toString()
     },
