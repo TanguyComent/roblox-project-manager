@@ -66,7 +66,7 @@ test('Reglages : page de l\'admin (adresse de redirection, permissions, etat « 
   const page = (await c.call('GET', '/settings')).text
   assert.match(page, /Non configure/)
   assert.match(page, /http:\/\/localhost:3000\/account\/roblox\/callback/)
-  assert.match(page, /openid profile group:read universe-places:write/)
+  assert.match(page, /openid profile group:read universe.place:read universe.place:write/)
   assert.doesNotMatch(page, /Verifier les identifiants/) // rien a verifier tant que ce n'est pas configure
   assert.match((await c.call('GET', '/account')).text, /Configure-la dans les Reglages/)
 })

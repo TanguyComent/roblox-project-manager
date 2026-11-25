@@ -15,7 +15,7 @@ export const config = {
   // Application OAuth 2.0 enregistree sur create.roblox.com (identite de CETTE instance ; les jetons, eux, sont par utilisateur).
   robloxClientId: env.ROBLOX_CLIENT_ID,
   robloxClientSecret: env.ROBLOX_CLIENT_SECRET,
-  robloxScopes: env.ROBLOX_OAUTH_SCOPES ?? 'openid profile group:read universe-places:write',
+  robloxScopes: env.ROBLOX_OAUTH_SCOPES ?? 'openid profile group:read universe.place:read universe.place:write',
   get secureCookies() { return this.publicUrl.startsWith('https://') },
 }
 

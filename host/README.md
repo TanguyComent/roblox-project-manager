@@ -34,6 +34,9 @@ Roblox demande de choisir le compte, puis les experiences et **groupes** que ce 
   immediatement (sans redemarrage) et un bouton les **verifie** aupres de Roblox. Les variables `ROBLOX_CLIENT_ID`, `ROBLOX_CLIENT_SECRET` et
   `ROBLOX_OAUTH_SCOPES` du `.env` restent possibles en solution de secours (la base a priorite). Une application en mode « prive » est limitee a
   10 utilisateurs par Roblox.
+- **Permissions** : par defaut `openid profile group:read universe.place:read universe.place:write` (les noms proposes par le Creator Dashboard ;
+  ce sont ceux a activer dans l'application). Attention : la publication d'un fichier de place (`POST /universes/v1/{universeId}/places/{placeId}/versions`)
+  n'accepte **que les cles d'API**, pas OAuth : les jetons OAuth servent a lire/modifier les infos des places et a verifier l'acces aux groupes.
 - **Jetons** : le jeton d'acces (15 min) et le jeton de rafraichissement (90 jours, **a usage unique**, renouvele a chaque rafraichissement) sont
   chiffres en base, jamais affiches. Les rafraichissements simultanes d'un meme compte sont fusionnes ; si Roblox refuse (autorisation revoquee ou
   expiree), le compte passe en « a reconnecter ».
