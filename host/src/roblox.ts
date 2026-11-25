@@ -16,10 +16,10 @@ export interface UniverseInfo { universeId: string; name: string; rootPlaceId: s
 export interface PlaceInfo { placeId: string; name: string }
 export interface GroupMembership { groupId: string; /** Tous les roles du membre dans le groupe (un membre peut en cumuler plusieurs). */ roleIds: string[] }
 /** Un role de groupe ; `permissions` est null quand la cle n'a pas le droit de les lire (il faut alors la permission group:read). */
-export interface GroupRole { name: string; rank: number | null; permissions: Record<string, boolean> | null }
+export interface GroupRole { id: string; name: string; rank: number | null; permissions: Record<string, boolean> | null }
 
 /** Resultat d'une recherche qui peut etre « introuvable » ou « impossible a savoir » (cle sans la permission de lecture, panne...). */
-export type Lookup<T> = { kind: 'found'; value: T } | { kind: 'missing' } | { kind: 'unknown' }
+export type Lookup<T> = { kind: 'found'; value: T } | { kind: 'missing' } | { kind: 'unknown'; /** code HTTP de la reponse (0 : pas de reponse) */ status?: number }
 
 export class RobloxError extends Error {
   status: number
@@ -128,12 +128,12 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
       try {
         const res = await get(`${BASE}/cloud/v2/groups/${groupId}/roles/${roleId}`, apiKey)
         if (res.status === 404) return { kind: 'missing' }
-        if (!res.ok) return { kind: 'unknown' }
+        if (!res.ok) return { kind: 'unknown', status: res.status }
         const j = (await res.json()) as { displayName?: string; rank?: number; permissions?: Record<string, unknown> }
         const permissions = j.permissions && typeof j.permissions === 'object'
           ? Object.fromEntries(Object.entries(j.permissions).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> : null
-        return { kind: 'found', value: { name: j.displayName ?? `Role ${roleId}`, rank: typeof j.rank === 'number' ? j.rank : null, permissions } }
-      } catch { return { kind: 'unknown' } }
+        return { kind: 'found', value: { id: roleId, name: j.displayName ?? `Role ${roleId}`, rank: typeof j.rank === 'number' ? j.rank : null, permissions } }
+      } catch { return { kind: 'unknown', status: 0 } }
     },
 
     async getUniverse(apiKey, universeId) {

@@ -383,3 +383,32 @@ test('projet : modifier le compte ou le groupe revalide l\'acces', async () => {
   assert.equal((await c.call('POST', `/projects/${id}`, { csrf, name: 'Steal Treasure', robloxAccountId: String(a.accountId) })).res.status, 303)
   assert.match((await c.call('GET', `/projects/${id}`)).text, /steal-treasure key/)
 })
+
+test('diagnostic des groupes : montre ce que Roblox repond pour chaque role', async () => {
+  const { c, rb } = await setup()
+  await connectRoblox(c)
+  let page = (await c.call('GET', '/account')).text
+  assert.match(page, /Diagnostic des groupes/)
+  assert.match(page, /role 12345600 « Owner » : \d+ permissions lues, manageGroupUniverses = true/)
+  assert.match(page, /role 77700 « Membre » : \d+ permissions lues, manageGroupUniverses = false/)
+  assert.match(page, /gestion des experiences : oui/)
+
+  const hidden = fakeRoblox()
+  hidden.state.hideRolePermissions = true
+  const c2 = client({ roblox: hidden.client })
+  await registerAndEnable(c2)
+  await connectRoblox(c2)
+  page = (await c2.call('GET', '/account')).text
+  assert.match(page, /permissions ABSENTES de la reponse/)
+  assert.match(page, /gestion des experiences : inconnue/)
+
+  const forbidden = fakeRoblox()
+  forbidden.state.membershipsForbidden = true
+  const c3 = client({ roblox: forbidden.client })
+  await registerAndEnable(c3)
+  await connectRoblox(c3)
+  page = (await c3.call('GET', '/account')).text
+  assert.match(page, /Liste des groupes illisible/)
+  assert.match(page, /HTTP 403/)
+  void rb
+})

@@ -176,3 +176,5 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .exp details.change summary { cursor: pointer; font-size: 13.5px; color: var(--accent); width: fit-content; }
 .exp details.change form { margin-top: 10px; }
 optgroup { color: var(--muted); font-style: normal; }
+ul.diag { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+ul.diag li { padding: 8px 10px; background: #0e1220; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; }

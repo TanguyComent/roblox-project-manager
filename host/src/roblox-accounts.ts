@@ -159,7 +159,11 @@ export function deleteAccount(db: Db, userId: number, id: number): boolean {
  * Un groupe dont le proprietaire de la cle est membre. `canManage` : son role lui permet de gerer les experiences du groupe
  * (`manageGroupUniverses`) ; `null` = impossible a savoir (la cle n'a pas la permission group:read, donc les permissions du role sont masquees).
  */
-export interface AuthorizedGroup { id: string; name: string | null; role: string | null; canManage: boolean | null }
+export interface AuthorizedGroup {
+  id: string; name: string | null; role: string | null; canManage: boolean | null
+  /** Ce que Roblox a repondu pour chaque role du compte dans ce groupe (aide a comprendre pourquoi un groupe est classe ainsi). */
+  diagnostic: string[]
+}
 const CACHE_MS = 5 * 60_000
 const MAX_GROUPS = 10
 const MAX_GROUPS_CHECKED = 60 // groupes dont on lit les roles (un compte peut avoir rejoint des dizaines de groupes)
@@ -191,9 +195,18 @@ export async function listAuthorizedGroups(db: Db, client: RobloxClient, account
 
   const describe = async ([id, roleIds]: [string, Set<string>], index: number): Promise<AuthorizedGroup> => {
     const g = await client.getGroup(key, id)
-    const group: AuthorizedGroup = { id, name: g.kind === 'found' ? g.value.name : null, role: null, canManage: null }
-    if (index >= MAX_GROUPS_CHECKED) return group
-    const roles = await Promise.all([...roleIds].map((r) => client.getRole(key, id, r)))
+    const group: AuthorizedGroup = { id, name: g.kind === 'found' ? g.value.name : null, role: null, canManage: null, diagnostic: [] }
+    if (roleIds.size === 0) group.diagnostic.push('Roblox n\'a indique aucun role pour ce compte dans ce groupe.')
+    if (index >= MAX_GROUPS_CHECKED) { group.diagnostic.push('Roles non lus (trop de groupes).'); return group }
+    const ids = [...roleIds]
+    const roles = await Promise.all(ids.map((r) => client.getRole(key, id, r)))
+    roles.forEach((r, i) => {
+      group.diagnostic.push(
+        r.kind === 'found'
+          ? `role ${ids[i]} « ${r.value.name} » : ${r.value.permissions ? `${Object.keys(r.value.permissions).length} permissions lues, manageGroupUniverses = ${r.value.permissions.manageGroupUniverses ?? 'absente'}` : 'permissions ABSENTES de la reponse (la cle n\'a probablement pas group:read)'}`
+          : r.kind === 'missing' ? `role ${ids[i]} : introuvable (404)` : `role ${ids[i]} : lecture refusee ou impossible (HTTP ${r.status ?? '?'})`,
+      )
+    })
     const found = roles.flatMap((r) => (r.kind === 'found' ? [r.value] : []))
     const top = [...found].sort((x, y) => (y.rank ?? -1) - (x.rank ?? -1))[0]
     group.role = top?.name ?? null

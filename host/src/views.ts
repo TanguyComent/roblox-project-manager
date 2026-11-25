@@ -166,6 +166,10 @@ export interface RobloxCardData {
     otherGroups: { id: string; name: string | null }[]
     /** Les permissions des roles ne sont pas lisibles avec cette cle (permission group:read manquante). */
     rolesUnreadable: boolean
+    /** Pourquoi la liste des groupes n'a pas pu etre lue (null : aucun probleme). */
+    groupsError: string | null
+    /** Ce que Roblox a repondu, groupe par groupe (pour comprendre un classement). */
+    diagnostic: { id: string; name: string | null; role: string | null; canManage: boolean | null; lines: string[] }[]
     projects: string[]
   }[]
   error?: string
@@ -188,7 +192,9 @@ function robloxCard(r: RobloxCardData, csrf: string) {
         ${a.groups === null ? '' : a.groups.length
           ? `<span class="muted small">Groupes ou gerer des experiences : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')}${g.role ? ` (${esc(g.role)})` : ''} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
           : '<span class="muted small">Aucun groupe ou ce compte peut gerer des experiences.</span>'}
+        ${a.groupsError ? `<span class="muted small">Liste des groupes illisible : ${esc(a.groupsError)}. Si c'est un refus (403), ajoute la permission <code>group:read</code> a la cle.</span>` : ''}
         ${a.rolesUnreadable ? '<span class="muted small">Les permissions des roles ne sont pas lisibles avec cette cle : ajoute-lui la permission <code>group:read</code> pour ne voir que les groupes utiles.</span>' : ''}
+        ${a.diagnostic.length ? `<details class="others"><summary>Diagnostic des groupes</summary><ul class="diag">${a.diagnostic.map((g) => `<li><strong>${esc(g.name ?? 'Groupe')}</strong> <code>${esc(g.id)}</code> · ${g.canManage === true ? 'gestion des experiences : oui' : g.canManage === false ? 'gestion des experiences : non' : 'gestion des experiences : inconnue'}${g.role ? ` · role « ${esc(g.role)} »` : ''}<br>${g.lines.map((l) => `<span class="muted small">${esc(l)}</span>`).join('<br>')}</li>`).join('')}</ul></details>` : ''}
         ${a.otherGroups.length ? `<details class="others"><summary>${a.otherGroups.length} autre${a.otherGroups.length > 1 ? 's' : ''} groupe${a.otherGroups.length > 1 ? 's' : ''} (role sans permission de gestion)</summary><span class="muted small">${a.otherGroups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span></details>` : ''}
         ${a.projects.length ? `<span class="muted small">Utilise par : ${a.projects.map(esc).join(', ')}</span>` : ''}
         <details class="change"><summary>Changer la cle</summary>

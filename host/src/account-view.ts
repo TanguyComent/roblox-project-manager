@@ -4,7 +4,7 @@ import { remainingRecoveryCodes } from './auth.ts'
 import type { Db } from './db.ts'
 import { getConnection } from './github-connection.ts'
 import { EXPIRY_WARNING_MS, canPublish, listAccounts, listAuthorizedGroups, manageableGroups, projectsUsingAccount, scopeLabels } from './roblox-accounts.ts'
-import type { RobloxClient } from './roblox.ts'
+import { RobloxError, type RobloxClient } from './roblox.ts'
 import { accountPage } from './views.ts'
 
 type Auth = NonNullable<Context<Env>['var']['auth']>
@@ -29,7 +29,13 @@ export async function renderAccount(
   const now = Date.now()
   const accounts = await Promise.all(listAccounts(db, a.user.id).map(async (acc) => {
     // groupes du compte : lecture « au mieux » (cache 5 min, 4 s maximum) pour ne jamais bloquer la page
-    const all = acc.status === 'ok' ? await withTimeout(listAuthorizedGroups(db, roblox, acc), 4000).catch(() => null) : null
+    let groupsError: string | null = null
+    const all = acc.status === 'ok'
+      ? await withTimeout(listAuthorizedGroups(db, roblox, acc), 4000).catch((e) => {
+        groupsError = e instanceof RobloxError ? `${e.message} (HTTP ${e.status})` : 'pas de reponse de Roblox (delai depasse)'
+        return null
+      })
+      : null
     const useful = all ? manageableGroups(all) : null
     return {
     id: acc.id, label: acc.label, username: acc.username, robloxId: acc.roblox_user_id, keyName: acc.key_name,
@@ -41,6 +47,8 @@ export async function renderAccount(
     groups: useful?.map((g) => ({ id: g.id, name: g.name, role: g.role })) ?? null,
     otherGroups: all && useful ? all.filter((g) => !useful.includes(g)).map((g) => ({ id: g.id, name: g.name })) : [],
     rolesUnreadable: !!all && all.some((g) => g.canManage === null),
+    groupsError,
+    diagnostic: all?.map((g) => ({ id: g.id, name: g.name, role: g.role, canManage: g.canManage, lines: g.diagnostic })) ?? [],
   }}))
   return accountPage({
     email: a.user.email, csrf: a.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a.user.id), notice: extra.notice,
