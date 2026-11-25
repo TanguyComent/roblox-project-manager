@@ -1,10 +1,12 @@
 import { createApp } from '../src/app.ts'
 import { decryptSecret, totpAt, TOTP_STEP } from '../src/crypto.ts'
 import { openDb } from '../src/db.ts'
+import { resetRobloxCaches } from '../src/roblox-accounts.ts'
 
 export const ORIGIN = 'http://localhost:3000'
 
 export function client(opts: Parameters<typeof createApp>[1] = {}) {
+  resetRobloxCaches()
   const db = openDb(':memory:')
   const app = createApp(db, opts)
   let cookie = ''

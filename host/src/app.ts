@@ -18,8 +18,6 @@ import { githubRoutes } from './github-routes.ts'
 import { createGithubClient, type GithubFactory } from './github.ts'
 import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
-import { settingsRoutes } from './settings-routes.ts'
-import { robloxCredentials } from './settings.ts'
 import { projectRoutes } from './project-routes.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
@@ -127,8 +125,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))
 
-  // identifiants de l'application OAuth : lus en base (page Reglages) a chaque appel, avec le .env en secours
-  const roblox = opts.roblox ?? createRobloxClient({ credentials: () => robloxCredentials(db), fetchImpl: opts.robloxFetch })
+  const roblox = opts.roblox ?? createRobloxClient({ fetchImpl: opts.robloxFetch })
   app.get('/account', async (c) => {
     const a = auth(c)
     const redirect = home(c)
@@ -148,7 +145,6 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   }
   githubRoutes(app, shared)
   robloxRoutes(app, shared)
-  settingsRoutes(app, shared)
   projectRoutes(app, shared)
 
   // Connexion --------------------------------------------------------------------------------------------------------------------

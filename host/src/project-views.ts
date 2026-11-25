@@ -8,7 +8,7 @@ const groupText = (p: Pick<Project, 'roblox_group_id' | 'roblox_group_name'>) =>
 const repoLink = (repo: string | null) =>
   repo ? `<a href="https://github.com/${esc(repo)}" target="_blank" rel="noopener noreferrer">${esc(repo)}</a>` : '<span class="muted">Aucun depot</span>'
 
-export function projectsPage(o: Viewer & { projects: (Project & { experience_count: number; roblox_username: string | null })[]; notice?: string }) {
+export function projectsPage(o: Viewer & { projects: (Project & { experience_count: number; roblox_label: string | null })[]; notice?: string }) {
   const rows = o.projects.map((p) => `
   <a class="row" href="/projects/${p.id}">
     <div class="row-main">
@@ -16,7 +16,7 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
       <span class="muted">${groupText(p)}</span>
     </div>
     <div class="row-side">
-      <span class="muted">${p.roblox_username ? `@${esc(p.roblox_username)} · ` : ''}${p.github_repo ? esc(p.github_repo) : 'sans depot'}</span>
+      <span class="muted">${p.roblox_label ? `${esc(p.roblox_label)} · ` : ''}${p.github_repo ? esc(p.github_repo) : 'sans depot'}</span>
       <span class="pill">${p.experience_count} experience${p.experience_count > 1 ? 's' : ''}</span>
     </div>
   </a>`).join('')
@@ -32,25 +32,25 @@ export function projectsPage(o: Viewer & { projects: (Project & { experience_cou
 }
 
 
-export interface AccountChoice { id: number; username: string; needsReauth: boolean; groups: { id: string; name: string | null }[] | null }
+export interface AccountChoice { id: number; label: string; invalid: boolean; groups: { id: string; name: string | null }[] | null }
 
-// Liste deroulante des comptes Roblox connectes (un compte a reconnecter n'est pas selectionnable).
+// Liste deroulante des comptes Roblox connectes (un compte dont la cle est invalide n'est pas selectionnable).
 const accountSelect = (accounts: AccountChoice[], selected: string | number | undefined) => `
     <select name="robloxAccountId" required>
       ${selected ? '' : '<option value="" selected disabled>Choisir un compte…</option>'}
-      ${accounts.map((a) => `<option value="${a.id}"${String(selected) === String(a.id) ? ' selected' : ''}${a.needsReauth ? ' disabled' : ''}>@${esc(a.username)}${a.needsReauth ? ' (a reconnecter)' : ''}</option>`).join('')}
+      ${accounts.map((a) => `<option value="${a.id}"${String(selected) === String(a.id) ? ' selected' : ''}${a.invalid ? ' disabled' : ''}>${esc(a.label)}${a.invalid ? ' (cle invalide)' : ''}</option>`).join('')}
     </select>`
 
 // Aide au choix du groupe : ceux que chaque compte a autorises (le groupe saisi doit en faire partie).
 const groupHints = (accounts: AccountChoice[]) => {
   const lines = accounts.filter((a) => a.groups && a.groups.length).map((a) =>
-    `<li><strong>@${esc(a.username)}</strong> : ${a.groups!.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</li>`)
+    `<li><strong>${esc(a.label)}</strong> : ${a.groups!.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</li>`)
   return lines.length
     ? `<details><summary>Groupes accessibles avec tes comptes</summary><ul class="hints">${lines.join('')}</ul></details>`
-    : '<p class="muted small">Aucun groupe autorise pour l\'instant : autorise-en un en reconnectant le compte (page Compte).</p>'
+    : '<p class="muted small">Aucun groupe trouve pour ces comptes : saisis l\'identifiant du groupe.</p>'
 }
 
-export interface PlacesByAccount { accountId: number; username: string; /** null : la liste n'a pas pu etre lue */ places: KnownPlace[] | null }
+export interface PlacesByAccount { accountId: number; label: string; /** null : la liste n'a pas pu etre lue */ places: KnownPlace[] | null }
 
 const placeLabel = (p: KnownPlace) => `${p.universeName} › ${p.placeName}${p.isRoot ? ' (accueil)' : ''} · ${p.placeId}`
 
@@ -60,10 +60,10 @@ function placePicker(names: { known: string; universeId: string; placeId: string
   const unavailable = groups.some((g) => g.places === null)
   const select = `<select name="${names.known}">
       <option value="">${emptyLabel}</option>
-      ${withPlaces.map((g) => `<optgroup label="@${esc(g.username)}">${g.places!.map((p) => { const val = `${p.universeId}:${p.placeId}`; return `<option value="${val}"${v.known === val ? ' selected' : ''}>${esc(placeLabel(p))}</option>` }).join('')}</optgroup>`).join('')}
+      ${withPlaces.map((g) => `<optgroup label="${esc(g.label)}">${g.places!.map((p) => { const val = `${p.universeId}:${p.placeId}`; return `<option value="${val}"${v.known === val ? ' selected' : ''}>${esc(placeLabel(p))}</option>` }).join('')}</optgroup>`).join('')}
     </select>`
   const note = unavailable ? '<p class="muted small">Liste des places indisponible pour le moment : saisis les identifiants.</p>'
-    : withPlaces.length === 0 ? '<p class="muted small">Aucune place connue pour ce compte : autorise des experiences en le reconnectant, ou saisis les identifiants.</p>' : ''
+    : withPlaces.length === 0 ? '<p class="muted small">Aucune place publique connue pour ce compte (les experiences privees ne sont pas listees) : saisis les identifiants.</p>' : ''
   return `<div class="picker">${select}${note}
     <details${v.universeId || v.placeId ? ' open' : ''}><summary>Saisir des identifiants a la main</summary>
       <div class="two">
@@ -196,7 +196,7 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
   </div>
   ${alert(o.notice, 'ok')}${alert(o.error)}
   <dl class="facts">
-    <dt>Compte Roblox</dt><dd>${(() => { const acc = o.accounts.find((a) => a.id === p.roblox_account_id); return acc ? `@${esc(acc.username)}${acc.needsReauth ? ' <span class="pill warn">A reconnecter</span>' : ''}` : '<span class="muted">Aucun</span>' })()}</dd>
+    <dt>Compte Roblox</dt><dd>${(() => { const acc = o.accounts.find((a) => a.id === p.roblox_account_id); return acc ? `${esc(acc.label)}${acc.invalid ? ' <span class="pill warn">Cle invalide</span>' : ''}` : '<span class="muted">Aucun</span>' })()}</dd>
     <dt>Depot GitHub</dt><dd>${repoLink(p.github_repo)}</dd>
     <dt>Identifiant</dt><dd><code>${esc(p.slug)}</code></dd>
   </dl>

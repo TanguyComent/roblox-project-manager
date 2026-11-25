@@ -47,12 +47,12 @@ export function parseRepo(raw: string): string | null {
 }
 
 // --- projets ----------------------------------------------------------------------------------------------------------------
-export function listProjects(db: Db, ownerId: number): (Project & { experience_count: number; roblox_username: string | null })[] {
+export function listProjects(db: Db, ownerId: number): (Project & { experience_count: number; roblox_label: string | null })[] {
   return db.prepare(
-    `SELECT p.*, (SELECT COUNT(*) FROM experiences e WHERE e.project_id = p.id) AS experience_count, a.username AS roblox_username
+    `SELECT p.*, (SELECT COUNT(*) FROM experiences e WHERE e.project_id = p.id) AS experience_count, a.label AS roblox_label
      FROM projects p LEFT JOIN roblox_accounts a ON a.id = p.roblox_account_id
      WHERE p.owner_id = ? ORDER BY p.created_at DESC, p.id DESC`,
-  ).all(ownerId) as unknown as (Project & { experience_count: number; roblox_username: string | null })[]
+  ).all(ownerId) as unknown as (Project & { experience_count: number; roblox_label: string | null })[]
 }
 
 export function getProject(db: Db, ownerId: number, id: number): Project | undefined {

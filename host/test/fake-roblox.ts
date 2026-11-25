@@ -1,151 +1,129 @@
 import { createRobloxClient } from '../src/roblox.ts'
 
-export interface FakeUniverse { id: string; name: string; rootPlaceId: string; places: { id: string; name: string }[]; public?: boolean }
-export interface FakeRobloxUser {
-  sub: string
-  username: string
-  displayName?: string
-  groups: { id: string; name: string }[]
-  /** Experiences que l'utilisateur a cochees sur l'ecran d'autorisation (identifiants explicites). */
-  authorizedUniverses?: FakeUniverse[]
-  /** Experiences PUBLIQUES de chaque groupe (listees via l'API publique quand « toutes les experiences » est autorise). */
-  publicGames?: Record<string, FakeUniverse[]>
+export interface FakeUniverse { id: string; name: string; owner: { type: 'User' | 'Group'; id: string }; public: boolean; rootPlaceId: string; places: { id: string; name: string }[] }
+export interface FakeKeyScope { name: string; operations: string[]; universeIds?: string[]; groupIds?: string[]; userIds?: string[] }
+export interface FakeKey {
+  key: string
+  name: string
+  userId: string
+  scopes: FakeKeyScope[]
+  enabled?: boolean
+  expired?: boolean
+  expirationTimeUtc?: string | null
 }
+export interface FakeUser { id: string; username: string; groups: { id: string; name: string }[] }
 
-const U_STEAL: FakeUniverse = {
-  id: '3828411582', name: 'Steal Treasure', rootPlaceId: '9100000001',
-  places: [{ id: '9100000001', name: 'Steal Treasure' }, { id: '9100000002', name: 'Lobby' }],
-}
-const U_HUB: FakeUniverse = {
-  id: '5550001', name: 'Boilr Hub', rootPlaceId: '6660001', public: true,
-  places: [{ id: '6660001', name: 'Hub' }, { id: '6660002', name: 'Hub - arene' }],
-}
+export const KEYS = {
+  tanguy: 'rbx-key-tanguy-AAAAAAAAAAAAAAAAAAAA',
+  tanguy2: 'rbx-key-tanguy2-BBBBBBBBBBBBBBBBBBB',
+  alt: 'rbx-key-alt-CCCCCCCCCCCCCCCCCCCCCCCC',
+  expired: 'rbx-key-expired-DDDDDDDDDDDDDDDDDDD',
+  disabled: 'rbx-key-disabled-EEEEEEEEEEEEEEEEEE',
+  unknown: 'rbx-key-unknown-FFFFFFFFFFFFFFFFFFFF',
+} as const
 
-export const DEFAULT_USERS: FakeRobloxUser[] = [
-  {
-    sub: '1001', username: 'tanguy_dev', displayName: 'Tanguy',
-    groups: [{ id: '123456', name: 'Boilr' }, { id: '777', name: 'Studio' }],
-    authorizedUniverses: [U_STEAL],
-    publicGames: { '123456': [U_HUB] },
-  },
-  { sub: '1002', username: 'alt_account', displayName: 'Alt', groups: [{ id: '888', name: 'Autre groupe' }] },
+const UNIVERSES: FakeUniverse[] = [
+  { id: '3828411582', name: 'Steal Treasure', owner: { type: 'User', id: '1001' }, public: false, rootPlaceId: '9100000001',
+    places: [{ id: '9100000001', name: 'Steal Treasure' }, { id: '9100000002', name: 'Lobby' }, ...[3, 4, 5, 6].map((n) => ({ id: `910000000${n}`, name: `Salle ${n}` }))] },
+  { id: '5550001', name: 'Boilr Hub', owner: { type: 'Group', id: '123456' }, public: true, rootPlaceId: '6660001',
+    places: [{ id: '6660001', name: 'Hub' }, { id: '6660002', name: 'Hub - arene' }] },
+  { id: '7770001', name: 'Jeu de alt', owner: { type: 'User', id: '1002' }, public: true, rootPlaceId: '7770002', places: [{ id: '7770002', name: 'Alt' }] },
+]
+const USERS: FakeUser[] = [
+  { id: '1001', username: 'tanguy_dev', groups: [{ id: '123456', name: 'Boilr' }, { id: '777', name: 'Studio' }] },
+  { id: '1002', username: 'alt_account', groups: [{ id: '888', name: 'Autre groupe' }] },
+]
+const PUBLISH = { name: 'universe-places', operations: ['write'] }
+const KEY_LIST: FakeKey[] = [
+  { key: KEYS.tanguy, name: 'steal-treasure key', userId: '1001', scopes: [PUBLISH, { name: 'universe', operations: ['read'] }] },
+  { key: KEYS.tanguy2, name: 'cle limitee', userId: '1001', scopes: [{ name: 'universe-places', operations: ['write'], universeIds: ['3828411582'] }] },
+  { key: KEYS.alt, name: 'alt key', userId: '1002', scopes: [{ name: 'universe', operations: ['read'] }] },
+  { key: KEYS.expired, name: 'vieille cle', userId: '1001', scopes: [PUBLISH], expired: true },
+  { key: KEYS.disabled, name: 'cle coupee', userId: '1001', scopes: [PUBLISH], enabled: false },
 ]
 
-// Faux Roblox OAuth : echange de code, userinfo, ressources autorisees, groupes, experiences, places, revocation.
-// Le jeton de rafraichissement est a USAGE UNIQUE (comme chez Roblox) : le reutiliser donne invalid_grant.
-export function fakeRoblox(o: { users?: FakeRobloxUser[]; resourcesStatus?: number; enabled?: boolean } = {}) {
-  const users = new Map((o.users ?? DEFAULT_USERS).map((u) => [u.sub, u]))
-  const calls: { method: string; path: string; host: string; body?: URLSearchParams; auth?: string }[] = []
-  const accessTokens = new Map<string, string>() // access token -> sub
-  const refreshTokens = new Map<string, string>() // refresh token (valide) -> sub
-  let counter = 0
+// Faux Roblox pour les cles d'API : introspection, groupes, appartenances, experiences, places, API publiques.
+export function fakeRoblox() {
+  const keys = new Map(KEY_LIST.map((k) => [k.key, { ...k }]))
+  const calls: { method: string; host: string; path: string; search: string; key?: string }[] = []
+  const state = { introspectStatus: 200, membershipsForbidden: false, universeForbidden: false }
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
-  const state = { revoked: [] as string[], expiresIn: 899, blockRefresh: false }
-
-  const issue = (sub: string) => {
-    counter++
-    const access = `at-${sub}-${counter}`
-    const refresh = `rt-${sub}-${counter}`
-    accessTokens.set(access, sub)
-    refreshTokens.set(refresh, sub)
-    return { access_token: access, refresh_token: refresh, token_type: 'Bearer', expires_in: state.expiresIn, scope: 'openid profile group:read' }
-  }
-  const allUniverses = () => {
-    const out = new Map<string, FakeUniverse>()
-    for (const u of users.values()) {
-      for (const x of u.authorizedUniverses ?? []) out.set(x.id, x)
-      for (const list of Object.values(u.publicGames ?? {})) for (const x of list) out.set(x.id, x)
-    }
-    return out
-  }
+  const user = (id: string) => USERS.find((u) => u.id === id)
+  const canAccess = (userId: string, u: FakeUniverse) =>
+    u.owner.type === 'User' ? u.owner.id === userId : !!user(userId)?.groups.some((g) => g.id === u.owner.id)
 
   const fetchImpl = (async (url: string, init: RequestInit = {}) => {
     const u = new URL(url)
     const method = init.method ?? 'GET'
-    const headers = (init.headers ?? {}) as Record<string, string>
-    const body = typeof init.body === 'string' || init.body instanceof URLSearchParams ? new URLSearchParams(String(init.body)) : undefined
-    calls.push({ method, path: u.pathname, host: u.host, body, auth: headers.authorization })
+    const apiKey = (init.headers as Record<string, string> | undefined)?.['x-api-key']
+    calls.push({ method, host: u.host, path: u.pathname, search: u.search, key: apiKey })
 
-    // --- API publiques (sans jeton) -----------------------------------------------------------------------------------------
+    // --- API publiques -------------------------------------------------------------------------------------------------------
+    if (u.host === 'users.roblox.com') {
+      const m = /^\/v1\/users\/(\d+)$/.exec(u.pathname)
+      const usr = m ? user(m[1]) : undefined
+      return usr ? json({ id: Number(usr.id), name: usr.username }) : json({ errors: [] }, 404)
+    }
     if (u.host === 'develop.roblox.com') {
       const m = /^\/v1\/universes\/(\d+)\/places$/.exec(u.pathname)
-      const uni = m ? allUniverses().get(m[1]) : undefined
-      return uni && uni.public !== false ? json({ data: uni.places.map((p) => ({ id: Number(p.id), universeId: Number(uni.id), name: p.name })) }) : json({ errors: [{ message: 'not found' }] }, 404)
+      const uni = m ? UNIVERSES.find((x) => x.id === m[1]) : undefined
+      return uni && uni.public ? json({ data: uni.places.map((p) => ({ id: Number(p.id), universeId: Number(uni.id), name: p.name })) }) : json({ errors: [] }, 404)
     }
     if (u.host === 'games.roblox.com') {
-      const g = /^\/v2\/groups\/(\d+)\/games$/.exec(u.pathname)
-      if (g) {
-        const list = [...users.values()].flatMap((x) => x.publicGames?.[g[1]] ?? [])
-        return json({ data: list.map((x) => ({ id: Number(x.id), name: x.name, rootPlace: { id: Number(x.rootPlaceId) } })) })
-      }
-      return json({ data: [] })
+      const m = /^\/v2\/(users|groups)\/(\d+)\/games$/.exec(u.pathname)
+      if (!m) return json({ data: [] })
+      const list = UNIVERSES.filter((x) => x.public && x.owner.type === (m[1] === 'users' ? 'User' : 'Group') && x.owner.id === m[2])
+      return json({ data: list.map((x) => ({ id: Number(x.id), name: x.name, rootPlace: { id: Number(x.rootPlaceId) } })) })
     }
 
-    // --- OAuth / Open Cloud -------------------------------------------------------------------------------------------------
-    if (u.pathname === '/oauth/v1/token' && method === 'POST') {
-      if (body!.get('client_id') !== 'cid' || body!.get('client_secret') !== 'secret') return json({ error: 'invalid_client' }, 401)
-      if (body!.get('grant_type') === 'authorization_code') {
-        const m = /^code-(\d+)$/.exec(body!.get('code') ?? '')
-        if (!m || !users.has(m[1]) || !body!.get('code_verifier')) return json({ error: 'invalid_grant', error_description: 'bad code' }, 400)
-        return json(issue(m[1]))
-      }
-      if (body!.get('grant_type') === 'refresh_token') {
-        const rt = body!.get('refresh_token') ?? ''
-        const sub = refreshTokens.get(rt)
-        if (!sub || state.blockRefresh) return json({ error: 'invalid_grant', error_description: 'refresh token invalid or used' }, 400)
-        refreshTokens.delete(rt) // usage unique
-        return json(issue(sub))
-      }
-    }
-    if (u.pathname === '/oauth/v1/userinfo') {
-      const sub = accessTokens.get((headers.authorization ?? '').replace('Bearer ', ''))
-      const user = sub ? users.get(sub) : undefined
-      return user ? json({ sub: user.sub, preferred_username: user.username, nickname: user.displayName ?? user.username }) : json({ error: 'invalid_token' }, 401)
-    }
-    if (u.pathname === '/oauth/v1/token/resources' && method === 'POST') {
-      if (o.resourcesStatus && o.resourcesStatus !== 200) return json({ message: 'boom' }, o.resourcesStatus)
-      const sub = accessTokens.get(body!.get('token') ?? '')
-      const user = sub ? users.get(sub) : undefined
-      if (!user) return json({ error: 'invalid_token' }, 401)
+    // --- Open Cloud ------------------------------------------------------------------------------------------------------------
+    if (u.pathname === '/api-keys/v1/introspect' && method === 'POST') {
+      if (state.introspectStatus !== 200) return json({ message: 'boom' }, state.introspectStatus)
+      const k = keys.get(JSON.parse(init.body as string).apiKey)
+      if (!k) return json({ message: 'API key not found' }, 404)
       return json({
-        resource_infos: [
-          { owner: { id: user.sub, type: 'User' }, resources: { universe: { ids: (user.authorizedUniverses ?? []).map((x) => x.id) } } },
-          ...user.groups.map((g) => ({ owner: { id: g.id, type: 'Group' }, resources: { universe: { ids: ['U'] } } })),
-        ],
+        name: k.name, authorizedUserId: Number(k.userId), scopes: k.scopes, enabled: k.enabled !== false, expired: k.expired === true,
+        expirationTimeUtc: k.expirationTimeUtc ?? null,
       })
     }
-    let m = /^\/cloud\/v2\/universes\/(\d+)$/.exec(u.pathname)
+    const k = apiKey ? keys.get(apiKey) : undefined
+    if (u.host === 'apis.roblox.com' && !k) return json({ message: 'invalid api key' }, 401)
+
+    let m = /^\/cloud\/v2\/groups\/(\d+)$/.exec(u.pathname)
     if (m) {
-      const sub = accessTokens.get((headers.authorization ?? '').replace('Bearer ', ''))
-      const user = sub ? users.get(sub) : undefined
-      const uni = user?.authorizedUniverses?.find((x) => x.id === m![1])
-      if (!user) return json({ error: 'invalid_token' }, 401)
-      if (!uni) return json({ message: 'forbidden' }, 403)
-      return json({ path: `universes/${uni.id}`, displayName: uni.name, rootPlace: `universes/${uni.id}/places/${uni.rootPlaceId}` })
+      const g = USERS.flatMap((x) => x.groups).find((x) => x.id === m![1])
+      return g ? json({ id: g.id, displayName: g.name }) : json({ message: 'not found' }, 404)
     }
-    m = /^\/cloud\/v2\/groups\/(\d+)$/.exec(u.pathname)
+    if (u.pathname === '/cloud/v2/groups/-/memberships') {
+      if (state.membershipsForbidden) return json({ message: 'forbidden' }, 403)
+      const uid = /users\/(\d+)/.exec(u.searchParams.get('filter') ?? '')?.[1]
+      const usr = uid ? user(uid) : undefined
+      return json({ groupMemberships: (usr?.groups ?? []).map((g) => ({ path: `groups/${g.id}/memberships/${uid}`, role: `groups/${g.id}/roles/1` })) })
+    }
+    m = /^\/cloud\/v2\/universes\/(\d+)$/.exec(u.pathname)
     if (m) {
-      for (const user of users.values()) {
-        const found = user.groups.find((x) => x.id === m![1])
-        if (found) return json({ id: found.id, displayName: found.name })
-      }
-      return json({ message: 'not found' }, 404)
+      const uni = UNIVERSES.find((x) => x.id === m![1])
+      if (!uni) return json({ message: 'not found' }, 404)
+      if (state.universeForbidden || !canAccess(k!.userId, uni)) return json({ message: 'forbidden' }, 403)
+      return json({ path: `universes/${uni.id}`, displayName: uni.name, rootPlace: `universes/${uni.id}/places/${uni.rootPlaceId}`, [uni.owner.type === 'User' ? 'user' : 'group']: `${uni.owner.type === 'User' ? 'users' : 'groups'}/${uni.owner.id}` })
     }
-    if (u.pathname === '/oauth/v1/token/revoke' && method === 'POST') {
-      state.revoked.push(body!.get('token') ?? '')
-      return new Response('', { status: 200 })
+    m = /^\/cloud\/v2\/universes\/(\d+)\/places\/(\d+)$/.exec(u.pathname)
+    if (m) {
+      const uni = UNIVERSES.find((x) => x.id === m![1])
+      if (!uni) return json({ message: 'not found' }, 404)
+      if (!canAccess(k!.userId, uni)) return json({ message: 'forbidden' }, 403)
+      const p = uni.places.find((x) => x.id === m![2])
+      return p ? json({ path: `universes/${uni.id}/places/${p.id}`, displayName: p.name }) : json({ message: 'not found' }, 404)
     }
     return json({ message: 'not found' }, 404)
   }) as unknown as typeof fetch
 
-  const client = createRobloxClient({
-    clientId: o.enabled === false ? undefined : 'cid',
-    clientSecret: o.enabled === false ? undefined : 'secret',
-    redirectUri: 'http://localhost:3000/account/roblox/callback',
-    scopes: 'openid profile group:read',
-    fetchImpl,
-  })
-  return { client, calls, state, refreshTokens, accessTokens, fetchImpl }
+  const client = createRobloxClient({ fetchImpl })
+  return {
+    client, calls, state, fetchImpl,
+    /** Modifie une cle (la desactiver, l'expirer, ou la retirer : `null`). */
+    setKey: (key: string, patch: Partial<FakeKey> | null) => { if (patch === null) keys.delete(key); else keys.set(key, { ...keys.get(key)!, ...patch }) },
+  }
 }
 
 export type FakeRoblox = ReturnType<typeof fakeRoblox>

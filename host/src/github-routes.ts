@@ -92,7 +92,7 @@ export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
       data.error = `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`
       status = 502
     }
-    return html(c, templatePickerPage({ email: a.user.email, csrf: a.session.csrf, admin: a.user.is_admin === 1, ...data }), status)
+    return html(c, templatePickerPage({ email: a.user.email, csrf: a.session.csrf, ...data }), status)
   }
 
   app.get('/account/github/template', async (c) => {

@@ -126,14 +126,14 @@ test('template sans GitHub connecte : renvoie vers la page Compte', async () => 
 test('experiences : une release, un dev, des bancs d\'essai numerotes', async () => {
   const { c, csrf } = await loggedIn()
   const id = projectIdFrom((await newProject(c, csrf)).res)
-  const add = (fields: Record<string, string>) => c.call('POST', `/projects/${id}/experiences`, { csrf, universeId: '1111', placeId: '2222', ...fields })
+  const add = (fields: Record<string, string>) => c.call('POST', `/projects/${id}/experiences`, { csrf, universeId: '3828411582', placeId: '9100000001', ...fields })
 
   assert.equal((await add({ kind: 'release' })).res.status, 303)
   const dupRelease = await add({ kind: 'release' })
   assert.equal(dupRelease.res.status, 400)
   assert.match(dupRelease.text, /deja une experience Release/)
-  assert.equal((await add({ kind: 'dev', placeId: '3333' })).res.status, 303)
-  for (let i = 0; i < 3; i++) await add({ kind: 'bench', placeId: String(4000 + i) })
+  assert.equal((await add({ kind: 'dev', placeId: '9100000002' })).res.status, 303)
+  for (let i = 0; i < 3; i++) await add({ kind: 'bench', placeId: String(9100000003 + i) })
 
   const labels = (c.db.prepare(`SELECT label FROM experiences WHERE kind = 'bench' ORDER BY id`).all() as { label: string }[]).map((r) => r.label)
   assert.deepEqual(labels, ['Bench 1', 'Bench 2', 'Bench 3'])
@@ -141,14 +141,14 @@ test('experiences : une release, un dev, des bancs d\'essai numerotes', async ()
   // un numero libere est reutilise
   const second = c.db.prepare(`SELECT id FROM experiences WHERE label = 'Bench 2'`).get() as { id: number }
   assert.equal((await c.call('POST', `/projects/${id}/experiences/${second.id}/delete`, { csrf })).res.status, 303)
-  await add({ kind: 'bench', placeId: '5000' })
+  await add({ kind: 'bench', placeId: '9100000006' })
   assert.deepEqual((c.db.prepare(`SELECT label FROM experiences WHERE kind = 'bench' ORDER BY id`).all() as { label: string }[]).map((r) => r.label), ['Bench 1', 'Bench 3', 'Bench 2'])
 
   const dupName = await add({ kind: 'bench', label: 'Bench 1' })
   assert.equal(dupName.res.status, 400)
 
   const page = await c.call('GET', `/projects/${id}`)
-  assert.match(page.text, /roblox\.com\/games\/3333/)
+  assert.match(page.text, /roblox\.com\/games\/9100000002/)
   assert.match(page.text, /Release/)
   assert.match((await c.call('GET', '/projects')).text, /5 experiences/)
 })
@@ -177,7 +177,7 @@ test('modification d\'un projet', async () => {
 test('suppression : le nom doit etre saisi, les experiences partent avec', async () => {
   const { c, csrf } = await loggedIn()
   const id = projectIdFrom((await newProject(c, csrf)).res)
-  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '1', placeId: '2' })
+  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '3828411582', placeId: '9100000002' })
   const wrong = await c.call('POST', `/projects/${id}/delete`, { csrf, confirm: 'autre chose' })
   assert.equal(wrong.res.status, 400)
   assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 1)
@@ -190,7 +190,7 @@ test('suppression : le nom doit etre saisi, les experiences partent avec', async
 test('un utilisateur ne voit ni ne modifie les projets d\'un autre', async () => {
   const { c, csrf } = await loggedIn()
   const id = projectIdFrom((await newProject(c, csrf)).res)
-  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '1', placeId: '2' })
+  await c.call('POST', `/projects/${id}/experiences`, { csrf, kind: 'dev', universeId: '3828411582', placeId: '9100000002' })
 
   // deuxieme utilisateur, session complete creee directement
   const other = await createUser(c.db, 'benoit@example.com', 'another long password')
@@ -200,7 +200,7 @@ test('un utilisateur ne voit ni ne modifie les projets d\'un autre', async () =>
   assert.doesNotMatch((await c.call('GET', '/projects')).text, /Steal Treasure/)
   assert.equal((await c.call('GET', `/projects/${id}`)).res.status, 404)
   assert.equal((await c.call('POST', `/projects/${id}`, { csrf: session.csrf, name: 'Pirate' })).res.status, 404)
-  assert.equal((await c.call('POST', `/projects/${id}/experiences`, { csrf: session.csrf, kind: 'bench', universeId: '1', placeId: '2' })).res.status, 404)
+  assert.equal((await c.call('POST', `/projects/${id}/experiences`, { csrf: session.csrf, kind: 'bench', universeId: '3828411582', placeId: '9100000002' })).res.status, 404)
   assert.equal((await c.call('POST', `/projects/${id}/delete`, { csrf: session.csrf, confirm: 'Steal Treasure' })).res.status, 404)
   assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM projects').get()!.n, 1)
   assert.equal(c.db.prepare('SELECT name FROM projects').get()!.name, 'Steal Treasure')

@@ -26,6 +26,8 @@ interface Ctx {
   requireFull: (c: Context) => Auth | Response
 }
 
+const GROUP_UNVERIFIED = "Projet cree. L'acces du compte au groupe n'a pas pu etre verifie (sa cle n'a pas le droit de lire les appartenances) : verifie que ce compte est bien membre du groupe."
+
 const NOTICES: Record<string, string> = {
   created: 'Projet cree.', updated: 'Projet mis a jour.', added: 'Experience ajoutee.', placechanged: 'Place mise a jour.', removed: 'Experience retiree.', deleted: 'Projet supprime.',
 }
@@ -52,7 +54,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   }
 
   const pendingWarnings = new Map<number, string>()
-  const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf, admin: a.user.is_admin === 1 })
+  const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf })
 
   // --- liste ----------------------------------------------------------------------------------------------------------------
   app.get('/projects', async (c) => {
@@ -67,8 +69,8 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     const accounts = listAccounts(db, userId)
     const timeout = <T,>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000).unref())])
     return Promise.all(accounts.map(async (acc) => ({
-      id: acc.id, username: acc.username, needsReauth: acc.status !== 'ok',
-      groups: acc.status === 'ok' && roblox.enabled ? await timeout(listAuthorizedGroups(db, roblox, acc.id)).catch(() => null) : null,
+      id: acc.id, label: acc.label, invalid: acc.status !== 'ok',
+      groups: acc.status === 'ok' ? await timeout(listAuthorizedGroups(db, roblox, acc)).catch(() => null) : null,
     })))
   }
 
@@ -76,8 +78,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
   const placeChoices = async (userId: number, onlyAccountId?: number | null): Promise<PlacesByAccount[]> => {
     const timeout = <T,>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000).unref())])
     const accounts = listAccounts(db, userId).filter((a) => a.status === 'ok' && (onlyAccountId == null || a.id === onlyAccountId))
-    if (!roblox.enabled) return accounts.map((a) => ({ accountId: a.id, username: a.username, places: null }))
-    return Promise.all(accounts.map(async (a) => ({ accountId: a.id, username: a.username, places: await timeout(listKnownPlaces(db, roblox, a.id)).catch(() => null) })))
+    return Promise.all(accounts.map(async (a) => ({ accountId: a.id, label: a.label, places: await timeout(listKnownPlaces(db, roblox, a)).catch(() => null) })))
   }
 
   const newPage = async (c: Context, a: Auth, form: NewProjectForm, error?: string, status: Status = 200) =>
@@ -115,9 +116,10 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if (listAccounts(db, a.user.id).length === 0) return fail('Connecte d\'abord un compte Roblox (page Compte) : un projet en a besoin pour publier.')
     const account = /^\d{1,12}$/.test(values.robloxAccountId ?? '') ? getAccount(db, a.user.id, Number(values.robloxAccountId)) : undefined
     if (!account) return fail('Choisis un compte Roblox parmi ceux que tu as connectes.')
-    if (account.status !== 'ok') return fail(`Le compte Roblox « ${account.username} » doit etre reconnecte (page Compte).`)
+    if (account.status !== 'ok') return fail(`La cle du compte Roblox « ${account.label} » n'est plus valide : mets-la a jour (page Compte).`)
     let groupId: number | null = null
     let groupName = values.groupName || null
+    let groupWarning: string | undefined
     if (values.groupId) {
       groupId = parseRobloxId(values.groupId)
       if (groupId === null) return fail('Identifiant de groupe invalide (chiffres uniquement).')
@@ -125,6 +127,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
       const check = await checkGroupAccess(db, roblox, account, groupId)
       if (!check.ok) return fail(check.error, check.status)
       groupName ||= check.name
+      if (!check.verified) groupWarning = GROUP_UNVERIFIED
     }
 
     // places Release / Dev (facultatives) : verifiees avant de creer quoi que ce soit
@@ -162,7 +165,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if (release.place) addExperience(db, project.id, { kind: 'release', universeId: release.place.universeId, placeId: release.place.placeId })
     if (dev.place) addExperience(db, project.id, { kind: 'dev', universeId: dev.place.universeId, placeId: dev.place.placeId })
     // l'avertissement (branche non appliquee) est garde le temps d'un affichage, sans passer par l'URL
-    if (warning) pendingWarnings.set(project.id, warning)
+    if (warning || groupWarning) pendingWarnings.set(project.id, [groupWarning, warning].filter(Boolean).join(' '))
     return c.redirect(`/projects/${project.id}?n=created`, 303)
   })
 
@@ -193,7 +196,7 @@ export function projectRoutes(app: Hono<Env>, ctx: Ctx) {
     if (!name || name.length > 60) return detail(c, a, project!, { error: 'Le nom doit faire entre 1 et 60 caracteres.' }, 400)
     const account: RobloxAccount | undefined = /^\d{1,12}$/.test(accountRaw) ? getAccount(db, a.user.id, Number(accountRaw)) : undefined
     if (!account) return detail(c, a, project!, { error: 'Choisis un compte Roblox parmi ceux que tu as connectes.' }, 400)
-    if (account.status !== 'ok') return detail(c, a, project!, { error: `Le compte Roblox « ${account.username} » doit etre reconnecte (page Compte).` }, 400)
+    if (account.status !== 'ok') return detail(c, a, project!, { error: `La cle du compte Roblox « ${account.label} » n'est plus valide : mets-la a jour (page Compte).` }, 400)
     let groupId = groupRaw ? parseRobloxId(groupRaw) : null
     if (groupRaw && groupId === null) return detail(c, a, project!, { error: 'Identifiant de groupe invalide (chiffres uniquement).' }, 400)
     if (groupName.length > 80) return detail(c, a, project!, { error: 'Le nom du groupe est trop long.' }, 400)

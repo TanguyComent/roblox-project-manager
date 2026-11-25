@@ -98,6 +98,30 @@ const MIGRATIONS = [
      value_enc TEXT NOT NULL,           -- chiffre (AES-256-GCM)
      updated_at INTEGER NOT NULL
    );`,
+  // 7 : on abandonne OAuth au profit de CLES D'API (une par compte Roblox). Les anciennes connexions OAuth n'ont pas de cle : elles sont retirees,
+  //     ainsi que les reglages d'application OAuth, les etats OAuth et la notion d'administrateur qui ne servaient qu'a cela.
+  `UPDATE projects SET roblox_account_id = NULL;
+   DROP TABLE oauth_states;
+   DROP TABLE settings;
+   DROP TABLE roblox_accounts;
+   ALTER TABLE users DROP COLUMN is_admin;
+   CREATE TABLE roblox_accounts (
+     id INTEGER PRIMARY KEY,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     label TEXT NOT NULL,
+     api_key_enc TEXT NOT NULL,         -- chiffre (AES-256-GCM), jamais renvoye au navigateur
+     key_hash TEXT NOT NULL,            -- sha256 de la cle : eviter les doublons sans la dechiffrer
+     key_name TEXT,
+     roblox_user_id TEXT NOT NULL,      -- compte Roblox auquel appartient la cle
+     username TEXT,
+     scopes_json TEXT NOT NULL DEFAULT '[]',
+     expires_at INTEGER,
+     status TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'invalid')),
+     status_detail TEXT,
+     checked_at INTEGER NOT NULL,
+     created_at INTEGER NOT NULL,
+     UNIQUE (user_id, key_hash)
+   );`,
 ]
 
 export function openDb(file?: string): Db {

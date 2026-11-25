@@ -6,7 +6,7 @@ import {
 } from './crypto.ts'
 
 export type Stage = 'mfa' | 'setup' | 'full'
-export interface User { id: number; email: string; totp_enabled: number; is_admin: number }
+export interface User { id: number; email: string; totp_enabled: number }
 export interface Session { id: string; user_id: number; stage: Stage; csrf: string; attempts: number; expires_at: number }
 
 export const FULL_SESSION_MS = 14 * 24 * 3600_000
@@ -37,10 +37,8 @@ export function findUserByEmail(db: Db, email: string) {
 export async function createUser(db: Db, email: string, password: string): Promise<User> {
   const e = normalizeEmail(email)
   const hash = await hashPassword(password)
-  // le premier compte cree est l'administrateur de l'instance
-  const admin = countUsers(db) === 0 ? 1 : 0
-  const r = db.prepare('INSERT INTO users (email, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)').run(e, hash, admin, now())
-  return { id: Number(r.lastInsertRowid), email: e, totp_enabled: 0, is_admin: admin }
+  const r = db.prepare('INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)').run(e, hash, now())
+  return { id: Number(r.lastInsertRowid), email: e, totp_enabled: 0 }
 }
 
 // Verifie e-mail + mot de passe. Renvoie l'utilisateur, ou null (meme duree dans les deux cas).
@@ -68,7 +66,7 @@ export function getSession(db: Db, token: string | undefined): { session: Sessio
   const s = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Session | undefined
   if (!s) return null
   if (s.expires_at <= now()) { deleteSession(db, token); return null }
-  const user = db.prepare('SELECT id, email, totp_enabled, is_admin FROM users WHERE id = ?').get(s.user_id) as User | undefined
+  const user = db.prepare('SELECT id, email, totp_enabled FROM users WHERE id = ?').get(s.user_id) as User | undefined
   if (!user) return null
   return { session: s, user }
 }

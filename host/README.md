@@ -24,40 +24,39 @@ Node 24+ (TypeScript execute directement, base SQLite integree `node:sqlite`). C
 
 ## Comptes Roblox
 
-Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte → Comptes Roblox* (OAuth 2.0 / Open Cloud, code d'autorisation + PKCE).
-Roblox demande de choisir le compte, puis les experiences et **groupes** que ce compte autorise.
+Chaque utilisateur connecte **un ou plusieurs comptes Roblox** depuis *Compte → Comptes Roblox*. Un compte = une **cle d'API Open Cloud** collee dans le site
+(rien a configurer sur l'instance : pas d'application OAuth, pas de `.env`).
 
-- **Configuration de l'instance** (une fois, par l'administrateur = le premier compte) : page **Reglages** du site. Elle explique comment creer
-  l'application OAuth sur <https://create.roblox.com/dashboard/credentials?activeTab=OAuthTab> (compte verifie par piece d'identite), affiche
-  l'adresse de redirection a declarer (`<PUBLIC_URL>/account/roblox/callback` ; `http://localhost:3000/...` est accepte pour les tests) et les
-  permissions, puis on y colle le Client ID et le secret. Ils sont **chiffres en base** (le secret n'est jamais reaffiche), pris en compte
-  immediatement (sans redemarrage) et un bouton les **verifie** aupres de Roblox. Les variables `ROBLOX_CLIENT_ID`, `ROBLOX_CLIENT_SECRET` et
-  `ROBLOX_OAUTH_SCOPES` du `.env` restent possibles en solution de secours (la base a priorite). Une application en mode « prive » est limitee a
-  10 utilisateurs par Roblox.
-- **Permissions** : par defaut `openid profile group:read universe.place:read universe.place:write` (les noms proposes par le Creator Dashboard ;
-  ce sont ceux a activer dans l'application). Attention : la publication d'un fichier de place (`POST /universes/v1/{universeId}/places/{placeId}/versions`)
-  n'accepte **que les cles d'API**, pas OAuth : les jetons OAuth servent a lire/modifier les infos des places et a verifier l'acces aux groupes.
-- **Jetons** : le jeton d'acces (15 min) et le jeton de rafraichissement (90 jours, **a usage unique**, renouvele a chaque rafraichissement) sont
-  chiffres en base, jamais affiches. Les rafraichissements simultanes d'un meme compte sont fusionnes ; si Roblox refuse (autorisation revoquee ou
-  expiree), le compte passe en « a reconnecter ».
-- **Securite du flux** : `state` aleatoire a usage unique, lie a l'utilisateur et a sa session, PKCE (S256), expiration 10 min.
-- Un compte utilise par un projet ne peut pas etre deconnecte ; deconnecter revoque le jeton chez Roblox.
+- **Pourquoi des cles d'API et pas OAuth** : une cle agit au nom de son proprietaire et couvre **toutes ses experiences, y compris celles creees
+  plus tard** (si « Restrict by Experience » est desactive), alors qu'un jeton OAuth ne couvre que les experiences cochees une par une sur l'ecran
+  d'autorisation. De plus la **publication d'un fichier de place** n'accepte que les cles d'API. Les cles servent aussi pour les game passes, produits
+  developpeur, badges, data stores… (selon les permissions donnees a la cle).
+- **Creer une cle** : <https://create.roblox.com/dashboard/credentials> → *Create API Key*, ajouter les permissions voulues (par ex. `universe-places`
+  en ecriture), laisser « Restrict by Experience » desactive, eviter les restrictions d'adresse IP, copier la cle (Roblox ne l'affiche qu'une fois).
+  Pour un groupe : cle generee par un compte membre du groupe (Roblox conseille un compte dedie).
+- **Verification** : a la connexion, la cle est inspectee chez Roblox (`POST /api-keys/v1/introspect`) : valide, activee, non expiree ; on en tire le
+  compte proprietaire, ses permissions et sa date d'expiration. Une cle desactivee, expiree ou inconnue est refusee. « Verifier » relit ces informations ;
+  si Roblox ne reconnait plus la cle (supprimee, regeneree, inutilisee 60 jours), le compte passe en **« cle invalide »** et se remet en etat en collant une
+  nouvelle cle (« Changer la cle », meme compte Roblox obligatoire). Une cle qui expire dans moins de 14 jours est signalee.
+- **Securite** : la cle est **chiffree en base** (AES-256-GCM), jamais reaffichee ni journalisee ; seul son hash sert a detecter les doublons.
+  Un compte utilise par un projet ne peut pas etre deconnecte (supprimer la cle chez Roblox reste a faire dans le Creator Dashboard).
 
 ## Projets
 
-Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : il doit faire partie des
-groupes autorises par le jeton de ce compte, via `POST /oauth/v1/token/resources` ; le nom est rempli automatiquement), un **depot GitHub** et des **experiences** :
+Un projet = un **compte Roblox** (obligatoire, choisi parmi ceux connectes), un **groupe Roblox** (facultatif, **verifie** : le proprietaire de la cle doit en
+etre membre, via `GET /cloud/v2/groups/-/memberships` ; le nom est rempli automatiquement ; si la cle n'a pas le droit de lire les appartenances, le groupe est
+accepte « non verifie » avec un avertissement), un **depot GitHub** et des **experiences** :
 une **Release**, un **Dev** (une seule de chaque) et autant de **Bench** (places jetables, nommees « Bench 1 », « Bench 2 »… par defaut).
 
 - **Places** : a la creation, la Release et la Dev se choisissent dans la liste des **places connues** du compte, ou par identifiants saisis a la main ;
   elles sont **facultatives** (les places peuvent ne pas exister encore) et se renseignent ou se **changent** plus tard depuis la page du projet
-  (« Changer la place »). Une place choisie dans la liste est re-verifiee cote serveur ; une place ne peut servir qu'une fois par projet.
-- **Places connues** : les experiences que le compte a cochees sur l'ecran d'autorisation (lues avec son jeton, privees comprises, via
-  `GET /cloud/v2/universes/{id}`) et, pour « toutes les experiences » d'un proprietaire, ses experiences **publiques** ; les places de chaque
-  experience viennent de l'API publique `develop.roblox.com`. Les experiences privees non autorisees explicitement n'apparaissent donc pas :
-  il reste la saisie des identifiants. Cache de 5 minutes.
+  (« Changer la place »). Chaque place est **verifiee chez Roblox avec la cle du compte** (l'experience existe, la place en fait partie : « introuvable » est
+  refuse ; « impossible a savoir », par exemple cle sans permission de lecture, est accepte). Une place ne peut servir qu'une fois par projet.
+- **Places connues** (pour la liste deroulante) : les experiences nommees par la cle (restriction par experience) et les experiences **publiques** de son proprietaire et
+  de ses groupes. L'API ne liste pas les experiences privees : elles se saisissent par identifiants, et sont verifiees avec la cle — **sans nouvelle autorisation**
+  pour une experience creee plus tard. Cache de 5 minutes.
 - **Pas de creation automatique** : l'API Open Cloud de Roblox ne permet **pas** de creer une experience ou une place (verifie dans sa specification
-  OpenAPI). On les cree dans Roblox Studio, puis on les rattache ici. Les experiences se rattachent par leurs identifiants d'univers et de place.
+  OpenAPI). On les cree dans Roblox Studio, puis on les rattache ici par leurs identifiants d'univers et de place.
 - **Depot GitHub** : lier un depot existant, ou en **creer un a partir d'un template** (`POST /repos/{template}/generate`) avec **le compte
   GitHub de l'utilisateur** : chacun colle son propre jeton dans *Compte → GitHub* (jeton « fine-grained » : Administration + Contents en
   ecriture ; verifie aupres de GitHub, chiffre en base, jamais reaffiche). Dans *Compte → GitHub → Template par defaut*, il choisit son

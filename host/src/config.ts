@@ -12,10 +12,6 @@ export const config = {
   allowSignup: env.ALLOW_SIGNUP === 'true',
   trustProxy: env.TRUST_PROXY === 'true', // true seulement derriere un reverse proxy qui pose X-Forwarded-For
   appName: env.APP_NAME ?? 'Roblox Project Manager',
-  // Application OAuth 2.0 enregistree sur create.roblox.com (identite de CETTE instance ; les jetons, eux, sont par utilisateur).
-  robloxClientId: env.ROBLOX_CLIENT_ID,
-  robloxClientSecret: env.ROBLOX_CLIENT_SECRET,
-  robloxScopes: env.ROBLOX_OAUTH_SCOPES ?? 'openid profile group:read universe.place:read universe.place:write',
   get secureCookies() { return this.publicUrl.startsWith('https://') },
 }
 

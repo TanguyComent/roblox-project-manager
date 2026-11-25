@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createSession, createUser } from '../src/auth.ts'
 import { getConnection, getToken } from '../src/github-connection.ts'
-import { saveAccount } from '../src/roblox-accounts.ts'
 import { fakeGithub } from './fake-github.ts'
 import { client, csrfOf, registerAndEnable } from './helpers.ts'
 
@@ -164,7 +163,7 @@ test('CSRF exige, et chaque utilisateur a sa propre connexion', async () => {
   await c.call('POST', '/account/github/disconnect', { csrf: session.csrf })
   assert.equal(c.db.prepare('SELECT COUNT(*) AS n FROM github_connections').get()!.n, 1)
   // un projet de Benoit ne peut pas utiliser le jeton de Tanguy
-  const benoitAccount = saveAccount(c.db, other.id, { sub: '2000', username: 'benoit', displayName: null }, { accessToken: 'a', refreshToken: 'r', expiresIn: 899, scope: '' })
+  const benoitAccount = Number(c.db.prepare("INSERT INTO roblox_accounts (user_id, label, api_key_enc, key_hash, roblox_user_id, username, status, checked_at, created_at) VALUES (?, 'benoit', 'x', 'h', '2000', 'benoit', 'ok', 0, 0)").run(other.id).lastInsertRowid)
   const r = await c.call('POST', '/projects', { csrf: session.csrf, name: 'Projet de Benoit', robloxAccountId: String(benoitAccount), repoMode: 'template', template: 'acme/tpl' })
   assert.equal(r.res.status, 400)
   assert.match(r.text, /Connecte d(?:'|&#39;)abord ton compte GitHub/)

@@ -137,15 +137,15 @@ ${brand}
 </section>`, { wide: true })
 }
 
-export interface Viewer { email: string; csrf: string; admin?: boolean }
+export interface Viewer { email: string; csrf: string }
 
 // Page d'une session complete : barre de navigation commune (Projets, Compte) + deconnexion.
-export function appPage(title: string, v: Viewer, active: 'projects' | 'account' | 'settings', body: string) {
+export function appPage(title: string, v: Viewer, active: 'projects' | 'account', body: string) {
   const link = (href: string, label: string, key: string) => `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ''}>${label}</a>`
   return layout(title, `
 <header class="topbar">
   <a class="brand-link" href="/">${brand}</a>
-  <nav class="nav">${link('/projects', 'Projets', 'projects')}${link('/account', 'Compte', 'account')}${v.admin ? link('/settings', 'Reglages', 'settings') : ''}</nav>
+  <nav class="nav">${link('/projects', 'Projets', 'projects')}${link('/account', 'Compte', 'account')}</nav>
   <div class="who">
     <span class="muted">${esc(v.email)}</span>
     <form method="post" action="/logout" class="inline">${csrfField(v.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
@@ -155,44 +155,77 @@ ${body}`, { wide: true })
 }
 
 export interface RobloxCardData {
-  /** false : l'application OAuth de l'instance n'est pas configuree. */
-  enabled: boolean
-  /** true : l'utilisateur est l'administrateur et peut la configurer (page Reglages). */
-  canConfigure: boolean
-  accounts: { id: number; username: string; displayName: string | null; robloxId: string; needsReauth: boolean; groups: { id: string; name: string | null }[] | null; projects: string[] }[]
+  accounts: {
+    id: number; label: string; username: string | null; robloxId: string; keyName: string | null
+    invalid: boolean; invalidDetail: string | null
+    permissions: string[]; canPublish: boolean
+    expiresAt: number | null; expiresSoon: boolean; checkedAt: number
+    groups: { id: string; name: string | null }[] | null
+    projects: string[]
+  }[]
   error?: string
   notice?: string
 }
 
+const dateFr = (ms: number) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+
 function robloxCard(r: RobloxCardData, csrf: string) {
-  const setup = !r.enabled ? `
-  <div class="alert error" role="note">
-    La connexion Roblox n'est pas encore configuree sur cette instance.
-    ${r.canConfigure ? '<a href="/settings">Configure-la dans les Reglages</a> (une application OAuth Roblox, a creer une seule fois).' : 'Demande a l\'administrateur de la configurer.'}
-  </div>` : ''
   const rows = r.accounts.map((a) => `
     <li class="exp acct">
       <div class="row-main">
-        <strong>${esc(a.displayName && a.displayName !== a.username ? `${a.displayName} (@${a.username})` : `@${a.username}`)}</strong>
-        <span class="muted">identifiant ${esc(a.robloxId)} · ${a.needsReauth ? '<span class="pill warn">A reconnecter</span>' : '<span class="pill ok">Connecte</span>'}</span>
+        <strong>${esc(a.label)}</strong>
+        <span class="muted">${a.username ? `@${esc(a.username)} · ` : ''}compte ${esc(a.robloxId)}${a.keyName ? ` · cle « ${esc(a.keyName)} »` : ''}
+          · ${a.invalid ? '<span class="pill warn">Cle invalide</span>' : '<span class="pill ok">Cle valide</span>'}
+          ${a.expiresSoon ? `<span class="pill warn">Expire le ${esc(dateFr(a.expiresAt!))}</span>` : ''}</span>
+        ${a.invalid ? `<span class="muted small">${esc(a.invalidDetail ?? 'Roblox ne reconnait plus cette cle.')} Colle une nouvelle cle ci-dessous.</span>` : ''}
+        ${!a.invalid && !a.canPublish ? '<span class="muted small">Cette cle n\'a pas la permission de publier des places (<code>universe-places:write</code>) : utile plus tard.</span>' : ''}
+        ${a.permissions.length ? `<span class="muted small">Permissions : ${a.permissions.map((p) => `<code>${esc(p)}</code>`).join(' ')}</span>` : ''}
         ${a.groups === null ? '' : a.groups.length
-          ? `<span class="muted small">Groupes autorises : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
-          : '<span class="muted small">Aucun groupe autorise (seulement ce compte).</span>'}
+          ? `<span class="muted small">Groupes : ${a.groups.map((g) => `${esc(g.name ?? 'Groupe')} <code>${esc(g.id)}</code>`).join(' · ')}</span>`
+          : '<span class="muted small">Aucun groupe.</span>'}
         ${a.projects.length ? `<span class="muted small">Utilise par : ${a.projects.map(esc).join(', ')}</span>` : ''}
+        <details class="change"><summary>Changer la cle</summary>
+          <form method="post" action="/account/roblox/${a.id}/key" autocomplete="off">${csrfField(csrf)}
+            <label>Nouvelle cle de ce meme compte Roblox
+              <input type="password" name="apiKey" autocomplete="off" spellcheck="false" required placeholder="Colle la cle d'API">
+            </label>
+            <div class="actions"><button class="primary" type="submit">Remplacer la cle</button></div>
+          </form></details>
       </div>
       <div class="acct-actions">
-        ${r.enabled ? `<a class="button" href="/account/roblox/connect">${a.needsReauth ? 'Reconnecter' : 'Mettre a jour'}</a>` : ''}
+        <form method="post" action="/account/roblox/${a.id}/verify" class="inline">${csrfField(csrf)}<button type="submit">Verifier</button></form>
         <form method="post" action="/account/roblox/${a.id}/disconnect" class="inline">${csrfField(csrf)}<button class="ghost danger" type="submit"${a.projects.length ? ' disabled title="Utilise par un projet"' : ''}>Deconnecter</button></form>
       </div>
     </li>`).join('')
   return `
 <section class="card">
   <h2>Comptes Roblox</h2>
-  <p class="muted">Les comptes qui publient tes experiences (Open Cloud, OAuth 2.0). Tu peux en connecter plusieurs ; chaque projet utilise l'un d'eux.</p>
-  ${alert(r.notice, 'ok')}${alert(r.error)}${setup}
-  ${r.accounts.length ? `<ul class="exps">${rows}</ul>` : r.enabled ? '<div class="empty"><p><strong>Aucun compte Roblox connecte.</strong></p></div>' : ''}
-  ${r.enabled ? `<div class="actions"><a class="button primary" href="/account/roblox/connect">${r.accounts.length ? 'Connecter un autre compte' : 'Connecter un compte Roblox'}</a></div>
-  <p class="muted small">Roblox te demande de choisir le compte, puis les experiences et groupes que ce compte autorise. Pour qu'un groupe soit utilisable dans un projet, autorise-le a cette etape.</p>` : ''}
+  <p class="muted">Un compte = une <strong>cle d'API</strong> Open Cloud. Elle agit au nom de son proprietaire et couvre aussi les experiences creees plus tard. Chaque projet utilise l'un de ces comptes.</p>
+  ${alert(r.notice, 'ok')}${alert(r.error)}
+  ${r.accounts.length ? `<ul class="exps">${rows}</ul>` : '<div class="empty"><p><strong>Aucun compte Roblox connecte.</strong></p></div>'}
+  <form method="post" action="/account/roblox" autocomplete="off" class="add-key">
+    ${csrfField(csrf)}
+    <h3>${r.accounts.length ? 'Connecter un autre compte' : 'Connecter un compte Roblox'}</h3>
+    <div class="two">
+      <label>Nom <span class="hint">facultatif</span>
+        <input type="text" name="label" maxlength="60" placeholder="Compte principal">
+      </label>
+      <label>Cle d'API
+        <input type="password" name="apiKey" autocomplete="off" spellcheck="false" required placeholder="Colle la cle d'API">
+      </label>
+    </div>
+    <details>
+      <summary>Comment creer une cle ?</summary>
+      <ol class="how">
+        <li>Ouvre le <a href="https://create.roblox.com/dashboard/credentials" target="_blank" rel="noopener noreferrer">Creator Dashboard → Cles d'API</a> avec le compte concerne, puis <em>Create API Key</em>.</li>
+        <li>Donne-lui un nom, puis ajoute les permissions voulues (« Access Permissions »), par exemple <code>universe-places</code> en ecriture pour publier. <strong>Laisse « Restrict by Experience » desactive</strong> : la cle couvre alors toutes tes experiences, <em>y compris celles que tu creeras plus tard</em>.</li>
+        <li>Pour un groupe : la cle s'obtient avec un compte membre du groupe (idealement un compte dedie) ; elle couvre les experiences du groupe selon son role.</li>
+        <li>Evite les restrictions d'adresse IP, et si tu fixes une expiration, pense a la renouveler (une cle inutilisee 60 jours expire aussi).</li>
+        <li>Copie la cle : <strong>Roblox ne l'affiche qu'une seule fois</strong>.</li>
+      </ol>
+    </details>
+    <div class="actions"><button class="primary" type="submit">Connecter</button></div>
+  </form>
 </section>`
 }
 
