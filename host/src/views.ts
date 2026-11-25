@@ -1,0 +1,160 @@
+// Pages HTML (rendues cote serveur). Tout texte dynamique passe par esc() ; aucun script en ligne (CSP stricte).
+import { config } from './config.ts'
+
+export const esc = (s: unknown) =>
+  String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+
+const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d8cff"/><stop offset="1" stop-color="#9b6dff"/></linearGradient></defs><path d="M9 11.5 16 8l7 3.5v9L16 24l-7-3.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M9 11.5 16 15l7-3.5M16 15v9" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`
+
+function layout(title: string, body: string, opts: { wide?: boolean } = {}) {
+  return `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>${esc(title)} · ${esc(config.appName)}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="shell${opts.wide ? ' wide' : ''}">
+${body}
+</main>
+</body>
+</html>`
+}
+
+const brand = `<div class="brand">${LOGO}<span>${esc(config.appName)}</span></div>`
+const alert = (msg?: string, kind: 'error' | 'ok' = 'error') => (msg ? `<p class="alert ${kind}" role="alert">${esc(msg)}</p>` : '')
+const csrfField = (csrf?: string) => (csrf ? `<input type="hidden" name="csrf" value="${esc(csrf)}">` : '')
+
+export function loginPage(o: { error?: string; email?: string; canSignup: boolean; notice?: string }) {
+  return layout('Connexion', `
+${brand}
+<section class="card">
+  <h1>Connexion</h1>
+  <p class="muted">Accede a tes projets et a tes agents.</p>
+  ${alert(o.notice, 'ok')}${alert(o.error)}
+  <form method="post" action="/login" autocomplete="on">
+    <label>Adresse e-mail
+      <input type="email" name="email" value="${esc(o.email ?? '')}" autocomplete="username" required autofocus>
+    </label>
+    <label>Mot de passe
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button class="primary" type="submit">Se connecter</button>
+  </form>
+  ${o.canSignup ? '<p class="foot">Pas encore de compte ? <a href="/register">Creer un compte</a></p>' : ''}
+</section>`)
+}
+
+export function registerPage(o: { error?: string; email?: string; first: boolean }) {
+  return layout('Creer un compte', `
+${brand}
+<section class="card">
+  <h1>${o.first ? 'Creer le premier compte' : 'Creer un compte'}</h1>
+  <p class="muted">${o.first ? 'Ce compte sera le proprietaire de l\'instance.' : 'Tu configureras ensuite l\'authentification a deux facteurs.'}</p>
+  ${alert(o.error)}
+  <form method="post" action="/register" autocomplete="on">
+    <label>Adresse e-mail
+      <input type="email" name="email" value="${esc(o.email ?? '')}" autocomplete="username" required autofocus>
+    </label>
+    <label>Mot de passe <span class="hint">10 caracteres minimum</span>
+      <input type="password" name="password" autocomplete="new-password" minlength="10" required>
+    </label>
+    <label>Confirmer le mot de passe
+      <input type="password" name="confirm" autocomplete="new-password" minlength="10" required>
+    </label>
+    <button class="primary" type="submit">Creer le compte</button>
+  </form>
+  <p class="foot">Deja un compte ? <a href="/login">Se connecter</a></p>
+</section>`)
+}
+
+export function mfaPage(o: { error?: string; csrf: string; email: string }) {
+  return layout('Verification', `
+${brand}
+<section class="card">
+  <h1>Verification en deux etapes</h1>
+  <p class="muted">Compte <strong>${esc(o.email)}</strong>. Saisis le code a 6 chiffres de ton application d'authentification, ou l'un de tes codes de secours.</p>
+  ${alert(o.error)}
+  <form method="post" action="/login/2fa" autocomplete="off">
+    ${csrfField(o.csrf)}
+    <label>Code
+      <input class="code" type="text" name="code" inputmode="text" autocomplete="one-time-code" spellcheck="false" maxlength="14" required autofocus placeholder="123 456">
+    </label>
+    <button class="primary" type="submit">Valider</button>
+  </form>
+  <form method="post" action="/logout" class="inline">${csrfField(o.csrf)}<button class="link" type="submit">Annuler et revenir a la connexion</button></form>
+</section>`)
+}
+
+export function setupPage(o: { error?: string; csrf: string; email: string; secret: string; qrSvg: string }) {
+  const spaced = o.secret.match(/.{1,4}/g)!.join(' ')
+  return layout('Authentification a deux facteurs', `
+${brand}
+<section class="card">
+  <h1>Active l'authentification a deux facteurs</h1>
+  <p class="muted">Elle est obligatoire. Utilise Google Authenticator, 1Password, Authy ou toute application compatible TOTP.</p>
+  ${alert(o.error)}
+  <ol class="steps">
+    <li>
+      <strong>Scanne ce QR code</strong>
+      <div class="qr" role="img" aria-label="QR code a scanner">${o.qrSvg}</div>
+      <details><summary>Je ne peux pas scanner</summary>
+        <p class="muted">Saisis cette cle a la main (type : temporel, SHA-1, 6 chiffres) :</p>
+        <code class="secret">${esc(spaced)}</code>
+      </details>
+    </li>
+    <li>
+      <strong>Saisis le code affiche</strong>
+      <form method="post" action="/2fa/setup" autocomplete="off">
+        ${csrfField(o.csrf)}
+        <input class="code" type="text" name="code" inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code" maxlength="7" required placeholder="123 456">
+        <button class="primary" type="submit">Activer</button>
+      </form>
+    </li>
+  </ol>
+  <form method="post" action="/logout" class="inline">${csrfField(o.csrf)}<button class="link" type="submit">Se deconnecter</button></form>
+</section>`, { wide: true })
+}
+
+export function recoveryPage(o: { codes: string[] }) {
+  return layout('Codes de secours', `
+${brand}
+<section class="card">
+  <h1>Conserve tes codes de secours</h1>
+  <p class="alert ok">L'authentification a deux facteurs est active.</p>
+  <p class="muted">Chaque code ne sert qu'une fois, si tu perds ton telephone. <strong>Ils ne seront plus affiches</strong> : copie-les dans un gestionnaire de mots de passe.</p>
+  <ul class="codes">${o.codes.map((c) => `<li><code>${esc(c)}</code></li>`).join('')}</ul>
+  <a class="button primary" href="/">J'ai enregistre mes codes, continuer</a>
+</section>`, { wide: true })
+}
+
+export function homePage(o: { email: string; csrf: string; recoveryLeft: number; notice?: string }) {
+  return layout('Accueil', `
+<header class="topbar">
+  ${brand}
+  <div class="who">
+    <span class="muted">${esc(o.email)}</span>
+    <form method="post" action="/logout" class="inline">${csrfField(o.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
+  </div>
+</header>
+<section class="card">
+  <h1>Bienvenue</h1>
+  ${alert(o.notice, 'ok')}
+  <p class="muted">Ton compte est pret. Les projets arriveront ici.</p>
+</section>
+<section class="card">
+  <h2>Securite</h2>
+  <dl class="facts">
+    <dt>Authentification a deux facteurs</dt><dd><span class="pill ok">Active</span></dd>
+    <dt>Codes de secours restants</dt><dd>${o.recoveryLeft} / 10${o.recoveryLeft <= 2 ? ' <span class="pill warn">Bientot epuises</span>' : ''}</dd>
+  </dl>
+  <form method="post" action="/logout-all" class="inline">${csrfField(o.csrf)}<button class="ghost danger" type="submit">Deconnecter tous les autres appareils</button></form>
+</section>`, { wide: true })
+}
+
+export function messagePage(title: string, text: string, status = 200) {
+  return { status, html: layout(title, `${brand}<section class="card"><h1>${esc(title)}</h1><p class="muted">${esc(text)}</p><a class="button" href="/">Retour</a></section>`) }
+}
