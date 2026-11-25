@@ -40,7 +40,7 @@ const E = Enum
 const BLACKISH = new Color3(27 / 255, 42 / 255, 53 / 255)
 const GUIOBJ = {
   Position: new UDim2(), AnchorPoint: new Vector2(), BackgroundColor3: new Color3(163 / 255, 162 / 255, 165 / 255),
-  BackgroundTransparency: 0, BorderColor3: BLACKISH, BorderSizePixel: 1, BorderMode: E.BorderMode.Outline,
+  BackgroundTransparency: 0, Transparency: 0, BorderColor3: BLACKISH, BorderSizePixel: 1, BorderMode: E.BorderMode.Outline,
   Visible: true, ZIndex: 1, LayoutOrder: 0, Rotation: 0, ClipsDescendants: false, Active: false, Selectable: false,
   Interactable: true, AutomaticSize: E.AutomaticSize.None, SizeConstraint: E.SizeConstraint.RelativeXY, Name: '',
 }

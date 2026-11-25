@@ -18,6 +18,8 @@ interface Node {
   folders?: Set<any>
   ro?: ResizeObserver
   contentRO?: ResizeObserver
+  scrollSentinel?: HTMLElement
+  padRO?: ResizeObserver
   autoSize?: string // axes AutomaticSize ajustes par etendue des enfants (X, Y ou XY)
   autoW?: number
   autoH?: number
@@ -323,7 +325,7 @@ function runPost() {
     fitAuto(n)
     fitText(n)
     updateCorner(n)
-    if (n.inst.ClassName === 'ScrollingFrame') syncScroll(n)
+    if (n.inst.ClassName === 'ScrollingFrame') { fitScrollPad(n); syncScroll(n) }
   }
   if (--postFrames > 0) { postScheduled = true; requestAnimationFrame(runPost) } else POST.clear()
 }
@@ -354,6 +356,36 @@ function fitAuto(node: Node) {
 }
 
 // CanvasPosition (ecrite par le code du jeu) -> position de defilement reelle.
+function padCss(pad: any, container: boolean): string {
+  const v = (u: any) => (container && u?.Scale ? `calc(${u.Scale * 100}cqh + ${u.Offset ?? 0}px)` : udim(u))
+  return `${v(pad.PaddingTop)} ${udim(pad.PaddingRight)} ${v(pad.PaddingBottom)} ${udim(pad.PaddingLeft)}`
+}
+
+// UIPadding (bas / droite) d'un ScrollingFrame : le canvas a la taille de la fenetre et les enfants debordent ; or le debordement
+// CSS ignore le padding de fin. Une sentinelle invisible, placee apres le dernier enfant + padding, etend la zone defilable.
+function fitScrollPad(node: Node) {
+  const pad = [...node.mods].find((m: any) => m.ClassName === 'UIPadding') as any
+  let sent = node.scrollSentinel as HTMLElement | undefined
+  const pb = pad ? (pad.PaddingBottom?.Offset ?? 0) + (pad.PaddingBottom?.Scale ?? 0) * node.el.clientHeight : 0
+  const pr = pad ? (pad.PaddingRight?.Offset ?? 0) + (pad.PaddingRight?.Scale ?? 0) * node.el.clientWidth : 0
+  if (!(pb > 0 || pr > 0)) { sent?.remove(); node.scrollSentinel = undefined; return }
+  if (!sent) {
+    sent = document.createElement('div')
+    Object.assign(sent.style, { position: 'absolute', width: '1px', height: '1px', pointerEvents: 'none', visibility: 'hidden' })
+    node.scrollSentinel = sent
+  }
+  if (sent.parentElement !== node.el) node.el.appendChild(sent)
+  let bottom = 0
+  let right = 0
+  for (const ch of Array.from(node.content.children) as HTMLElement[]) {
+    if (ch.style.display === 'none') continue
+    bottom = Math.max(bottom, ch.offsetTop + ch.offsetHeight)
+    right = Math.max(right, ch.offsetLeft + ch.offsetWidth)
+  }
+  sent.style.top = px(Math.max(0, bottom + pb - 1))
+  sent.style.left = px(Math.max(0, right + pr - 1))
+}
+
 function syncScroll(node: Node) {
   const cp = node.inst.CanvasPosition
   if (!cp) return
@@ -435,13 +467,20 @@ function applyStyle(node: Node) {
   const size = inst.Size
   let w = udim(size.X)
   let h = udim(size.Y)
-  if (pl?.ClassName === 'UIGridLayout') { w = udim(pl.CellSize.X); h = udim(pl.CellSize.Y) }
+  let gridAspect = 0
+  if (pl?.ClassName === 'UIGridLayout') {
+    w = udim(pl.CellSize.X); h = udim(pl.CellSize.Y)
+    // Un UIAspectRatioConstraint enfant de la grille impose le ratio des cellules : la hauteur se deduit de la largeur.
+    const gar = pl._children.find((c: any) => c.ClassName === 'UIAspectRatioConstraint')
+    if (gar && gar.AspectRatio > 0) { gridAspect = gar.AspectRatio; h = 'auto' }
+  }
   if (auto.includes('X')) { s.minWidth = w; w = 'fit-content' }
   if (auto.includes('Y')) { s.minHeight = h; h = 'fit-content' }
   const ar = mods.UIAspectRatioConstraint
   node.aspect = ar ? { ratio: ar.AspectRatio, type: ar.AspectType?.Name ?? 'FitWithinMaxSize', axis: ar.DominantAxis?.Name ?? 'Width' } : undefined
   s.width = w
   s.height = h
+  if (gridAspect) s.aspectRatio = String(gridAspect)
   const sc = mods.UISizeConstraint
   if (sc) {
     if (sc.MinSize.X > 0) s.minWidth = px(sc.MinSize.X)
@@ -497,7 +536,10 @@ function applyStyle(node: Node) {
   // Dans Roblox la bordure suit la transparence du fond : BackgroundTransparency = 1 masque aussi la bordure.
   if ((inst.BorderSizePixel ?? 0) > 0 && baseAlpha > 0) { s.outline = `${inst.BorderSizePixel}px solid ${toCssColor(inst.BorderColor3, baseAlpha)}`; s.outlineOffset = '0' }
   if (inst.ClipsDescendants || cls === 'CanvasGroup') s.overflow = 'hidden'
-  if (cls === 'CanvasGroup' && inst.GroupTransparency) s.opacity = String(1 - inst.GroupTransparency)
+  // GuiObject.Transparency : s'applique a l'objet et a tous ses descendants (en plus de GroupTransparency pour un CanvasGroup).
+  const groupT = cls === 'CanvasGroup' ? inst.GroupTransparency || 0 : 0
+  const objT = typeof inst.Transparency === 'number' ? inst.Transparency : 0
+  if (groupT || objT) s.opacity = String((1 - groupT) * (1 - objT))
   if (cls === 'ScrollingFrame') {
     const dir: string = inst.ScrollingDirection?.Name ?? 'XY'
     const on = inst.ScrollingEnabled !== false
@@ -543,12 +585,16 @@ function applyStyle(node: Node) {
 
   // contenu : padding + mise en page
   const pad = mods.UIPadding
+  // Padding haut/bas en echelle : Roblox le rapporte a la HAUTEUR, alors que le padding CSS en % se rapporte toujours a la largeur.
+  // On passe par des unites de conteneur (cqh) : l'element devient un conteneur de taille (seulement s'il n'est pas AutomaticSize).
+  const padVertScale = !!pad && (!!pad.PaddingTop?.Scale || !!pad.PaddingBottom?.Scale)
+  if (padVertScale && auto === 'None') s.containerType = 'size'
   const lay = mods.UIListLayout ?? mods.UIGridLayout
   const isScroll = cls === 'ScrollingFrame'
   if (auto !== 'None' && lay) {
     // AutomaticSize avec liste/grille : les enfants sont dans le flux, le conteneur s'ajuste naturellement
     cs.position = 'relative'
-    if (pad) cs.padding = `${udim(pad.PaddingTop)} ${udim(pad.PaddingRight)} ${udim(pad.PaddingBottom)} ${udim(pad.PaddingLeft)}`
+    if (pad) cs.padding = padCss(pad, padVertScale && auto === 'None')
   } else if (isScroll) {
     // AutomaticCanvasSize : le canvas grandit avec son contenu (liste/grille en flux) au lieu d'une taille fixe.
     const ac: string = inst.AutomaticCanvasSize?.Name ?? 'None'
@@ -559,7 +605,14 @@ function applyStyle(node: Node) {
     cs.height = ac.includes('Y') ? '100%' : udim(inst.CanvasSize.Y)
     cs.minWidth = '100%'
     cs.minHeight = '100%'
-    if (pad) cs.padding = `${udim(pad.PaddingTop)} ${udim(pad.PaddingRight)} ${udim(pad.PaddingBottom)} ${udim(pad.PaddingLeft)}`
+    if (pad) {
+      // la zone defilable doit inclure le padding du bas : on la recalcule des que le contenu change de taille
+      if (!node.padRO) node.padRO = new ResizeObserver(() => postLayout(node))
+      node.padRO.observe(node.content)
+      for (const ch of Array.from(node.content.children) as HTMLElement[]) node.padRO.observe(ch)
+      postLayout(node)
+    }
+    if (pad) cs.padding = padCss(pad, padVertScale && auto === 'None')
   } else {
     cs.position = 'absolute'
     cs.left = pad ? udim(pad.PaddingLeft) : '0'
@@ -638,7 +691,7 @@ function applyStyle(node: Node) {
       if (!auto.includes('Y')) ts.height = '100%'
       if (!auto.includes('X')) ts.width = '100%'
     }
-    if (pad) ts.padding = `${udim(pad.PaddingTop)} ${udim(pad.PaddingRight)} ${udim(pad.PaddingBottom)} ${udim(pad.PaddingLeft)}`
+    if (pad) ts.padding = padCss(pad, padVertScale && auto === 'None')
     // Contour du texte (UIStroke Contextual ou TextStrokeTransparency) : calque separe SOUS le remplissage. Le texte par-dessus
     // masque la moitie interieure du trait, il reste donc un contour exterieur de `Thickness` pixels, et le remplissage
     // (couleur unie ou degrade) n'est jamais recouvert par le contour.
@@ -736,8 +789,18 @@ function wireEvents(node: Node) {
     fire(inst, 'MouseMoved', x, y)
     fire(inst, 'InputChanged', inputObject('MouseMovement', 'Change', x, y))
   })
-  // Un clic / appui ne remonte pas aux parents : seul l'element touche le recoit (comme un bouton Roblox qui "avale" l'entree).
-  const own = (e: Event) => (e.target as HTMLElement | null)?.closest?.('.rbx') === el
+  // Un clic / appui ne remonte pas au-dela d'un element qui "avale" l'entree (bouton, cadre Active, zone defilable, TextBox).
+  // Un cadre ordinaire qui ecoute seulement un evenement (effet de survol...) ne bloque rien : le bouton dessous recoit quand meme.
+  const sinks = (i: any) => i.ClassName === 'TextButton' || i.ClassName === 'ImageButton' || i.ClassName === 'TextBox' || i.ClassName === 'ScrollingFrame' || i.Active === true
+  const own = (e: Event) => {
+    let cur = (e.target as HTMLElement | null)?.closest?.('.rbx') as HTMLElement | null | undefined
+    while (cur && cur !== el) {
+      const cn = BYEL.get(cur)
+      if (cn && sinks(cn.inst)) return false
+      cur = cur.parentElement?.closest?.('.rbx') as HTMLElement | null | undefined
+    }
+    return cur === el
+  }
   el.addEventListener('pointerdown', (e) => {
     if (!own(e)) return
     const [x, y] = relPos(el, e)
@@ -756,6 +819,7 @@ function wireEvents(node: Node) {
   })
   el.addEventListener('click', (e) => {
     if (!own(e)) return
+    if (inst.ClassName !== 'TextButton' && inst.ClassName !== 'ImageButton') return // Activated n'existe que sur les boutons
     const [x, y] = relPos(el, e)
     fire(inst, 'Activated', inputObject('MouseButton1', 'End', x, y), 1)
     fire(inst, 'MouseButton1Click')

@@ -1,0 +1,9 @@
+[
+  { "eval": "(async()=>{await new Promise(r=>setTimeout(r,1200));window.__logEv=1;return 'ok'})()" },
+  { "move": [252, 192] },
+  { "wait": 150 },
+  { "down": [252, 192] },
+  { "up": [252, 192] },
+  { "wait": 400 },
+  { "eval": "(()=>{const t=[...document.querySelectorAll('#viewport .rbx')].find(e=>e.dataset.cls==='TextButton'&&e.textContent.includes('Uncommon'));const ls=[...t.querySelectorAll('.rbx')].filter(e=>e.dataset.cls==='TextLabel');const tr=t.getBoundingClientRect();const bg=getComputedStyle(t.querySelector('.rbx')).backgroundColor;return JSON.stringify({bg,btn:[Math.round(tr.y),Math.round(tr.height)],labels:ls.map(b=>{const r=b.getBoundingClientRect();return [b.textContent,Math.round(r.y),Math.round(r.height)]})})})()" }
+]
