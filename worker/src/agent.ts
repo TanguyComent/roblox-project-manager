@@ -1,6 +1,6 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
 import { DEFAULT_ENV_PATH, readConfig, writeConfig } from './config.ts'
-import { parsePairingCode } from './protocol.ts'
+import { readPairingInput } from './protocol.ts'
 import { startWorker, type RunningWorker, type WorkerOptions, type WorkerState } from './worker.ts'
 
 export type AgentState = 'unconfigured' | 'stopped' | WorkerState
@@ -75,12 +75,16 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
   }
 
   return {
-    snapshot: () => ({ state, hostUrl, workerName, detail, logs: [...logs], startedAt }),
+    // Un .env cree ou modifie a la main apres le lancement est pris en compte des que la page est rechargee.
+    snapshot: () => {
+      if (state === 'unconfigured' && !current && readConfig(envPath)) start()
+      return { state, hostUrl, workerName, detail, logs: [...logs], startedAt }
+    },
     start, stop, log,
     async pair(code) {
-      const parsed = parsePairingCode(code)
-      if (!parsed) return { ok: false, error: "Code de jumelage invalide : copie-le en entier depuis la page « Workers » du site (il commence par rpm1.)." }
-      writeConfig(parsed, envPath)
+      const parsed = readPairingInput(code)
+      if (!parsed.ok) return { ok: false, error: parsed.reason }
+      writeConfig({ hostUrl: parsed.hostUrl, token: parsed.token }, envPath)
       log(`jumele avec ${parsed.hostUrl}`)
       await stop()
       start()

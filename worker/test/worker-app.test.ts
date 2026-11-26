@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { createAgent } from '../src/agent.ts'
 import { createAutostart, type Autostart } from '../src/autostart.ts'
 import { parseEnv, readConfig, writeConfig } from '../src/config.ts'
-import { PAIRING_PREFIX, parsePairingCode } from '../src/protocol.ts'
+import { PAIRING_PREFIX, parsePairingCode, readPairingInput } from '../src/protocol.ts'
 import { createUi } from '../src/ui.ts'
 import type { RunningWorker, WorkerOptions } from '../src/worker.ts'
 
@@ -152,7 +152,7 @@ test('interface : page, jumelage, jeton jamais affiche, demarrage auto', async (
     const csrf = await u.csrf()
     const bad = await u.post('/pair', { csrf, code: 'nope' })
     assert.equal(bad.status, 303)
-    assert.match(decodeURIComponent(bad.headers.get('location')!), /invalide/)
+    assert.match(decodeURIComponent(bad.headers.get('location')!), /pas un code/)
     assert.equal(readConfig(u.envPath), null)
 
     const ok = await u.post('/pair', { csrf, code: code() })
@@ -199,4 +199,17 @@ test('interface : protegee contre les autres sites (CSRF, origine, DNS rebinding
     assert.match(h.get('content-security-policy')!, /default-src 'none'/)
     assert.equal(h.get('x-frame-options'), 'DENY')
   } finally { u.close() }
+})
+
+test('code de jumelage : tolere le texte autour et les retours a la ligne, explique les erreurs', () => {
+  const c = code()
+  const wrapped = c.replace(/(.{20})/g, '$1\n')
+  assert.equal(readPairingInput(`Voici : "${wrapped}" merci`).ok, true)
+  assert.equal(readPairingInput(`RPM_HOST_URL=http://localhost:3000\nRPM_WORKER_TOKEN=${TOKEN}\n`).ok, true)
+  const reason = (s: string) => { const r = readPairingInput(s); return r.ok ? '' : r.reason }
+  assert.match(reason(TOKEN), /jeton seul/)
+  assert.match(reason('bonjour'), /pas un code/)
+  assert.match(reason(c.slice(0, 20)), /incomplet|jeton|abime/)
+  assert.match(reason(code('localhost:3000')), /http/)
+  assert.match(reason(code('http://x', 'court')), /jeton/)
 })
