@@ -63,7 +63,7 @@ export function startWorker(opts: WorkerOptions): RunningWorker {
       log(`tache ${jobId} (${kind}) : debut`)
       const output = await handler({
         jobId, payload, signal: abort.signal,
-        event: (level, text) => send({ type: 'event', jobId, level, text }),
+        event: (level, text, kind) => send({ type: 'event', jobId, level, text, ...(kind ? { kind } : {}) }),
       })
       send({ type: 'result', jobId, ok: true, output })
       log(`tache ${jobId} : terminee`)

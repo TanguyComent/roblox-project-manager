@@ -119,4 +119,7 @@ la meme conversation ; si ce Worker est supprime, un autre prend le relais (nouv
 - Le projet doit avoir un **depot GitHub** ; il est clone par le Worker avec l'authentification de la machine (gestionnaire d'identifiants git ou cle ssh).
 - Une reponse a la fois par chat ; elle peut etre annulee (le processus Claude est arrete). Supprimer un chat arrete sa reponse en cours ; la branche reste sur GitHub.
 - Une tache peut exiger des outils (`requires`) : elle ne part que sur un Worker qui les a, et attend sinon (un outil detecte plus tard la debloque).
-- Les reponses de l'IA sont affichees echappees (jamais interpretees comme du HTML).
+- Les reponses de l'IA sont rendues en Markdown **echappe** (jamais de HTML venant de l'IA) ; une page de chat ne contient aucun script en ligne (CSP stricte).
+- **Interface** (dans l'esprit de Claude Code) : liste des chats a gauche avec une pastille par chat (en cours, en attente d'un Worker, reponse non lue, echec), conversation a droite avec
+  l'**activite de l'IA** en direct (pensee quand le modele en produit une, lecture / ecriture de fichiers, commandes), choix du **modele** et de l'**effort** par chat, titre et branche deduits
+  du premier message. La page se met a jour sans rechargement (interrogation de `/projects/:id/chats/:cid/live`, `public/chat.js`) ; Entree envoie, Maj+Entree passe a la ligne.

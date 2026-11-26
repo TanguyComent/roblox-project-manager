@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { aiHandlers, DEFAULT_ALLOW, DEFAULT_DENY, parseClaudeOutput } from '../src/ai.ts'
+import { aiHandlers, DEFAULT_ALLOW, DEFAULT_DENY, describeStreamEvent, parseClaudeOutput } from '../src/ai.ts'
 import { createGit } from '../src/git.ts'
 import type { JobContext } from '../src/jobs.ts'
 
@@ -12,7 +12,7 @@ const FAKE = join(import.meta.dirname, 'fake-claude.mjs')
 const tmp = () => mkdtempSync(join(tmpdir(), 'rpm-ai-'))
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim()
-const ctx = (payload: unknown, events: string[] = [], signal = new AbortController().signal): JobContext => ({ jobId: 1, payload, signal, event: (_l, t) => { events.push(t) } })
+const ctx = (payload: unknown, events: string[] = [], signal = new AbortController().signal, typed: { kind?: string; text: string }[] = []): JobContext => ({ jobId: 1, payload, signal, event: (_l, t, kind) => { events.push(t); typed.push({ kind, text: t }) } })
 const rejects = (p: Promise<unknown>, re: RegExp) => assert.rejects(p, (e: Error) => { assert.match(e.message, re); return true })
 
 function remote() {
@@ -68,7 +68,8 @@ test('requete IA : prepare la branche, lance claude dessus avec des droits limit
 
   const [call] = calls()
   assert.equal(call.cwd.replace(/\\/g, '/').toLowerCase(), join(ws, 'jeu', 'branches', 'ai+chat-1').replace(/\\/g, '/').toLowerCase(), 'claude travaille dans le dossier de la branche')
-  assert.ok(call.args.includes('-p') && call.args.includes('json'))
+  assert.ok(call.args.includes('-p') && call.args.includes('stream-json') && call.args.includes('--verbose'))
+  assert.ok(!call.args.includes('--effort') && !call.args.includes('--model'), 'sans choix : valeurs par defaut du CLI')
   assert.equal(call.args[call.args.indexOf('--permission-mode') + 1], 'acceptEdits')
   assert.equal(call.args[call.args.indexOf('--permission-prompts') + 1], 'none')
   assert.ok(!call.args.includes('--resume'))
@@ -84,10 +85,11 @@ test('deuxieme message : conversation reprise (--resume), meme dossier, pas de n
   const bare = remote()
   const { h, calls } = setup()
   await h['ai.chat'](ctx(chat(bare)))
-  const r = await h['ai.chat'](ctx(chat(bare, { prompt: 'Et maintenant MODIFIE', sessionId: '11111111-2222-3333-4444-555555555555', model: 'sonnet' }))) as Record<string, any>
+  const r = await h['ai.chat'](ctx(chat(bare, { prompt: 'Et maintenant MODIFIE', sessionId: '11111111-2222-3333-4444-555555555555', model: 'sonnet', effort: 'high' }))) as Record<string, any>
   const second = calls()[1]
   assert.equal(second.args[second.args.indexOf('--resume') + 1], '11111111-2222-3333-4444-555555555555')
   assert.equal(second.args[second.args.indexOf('--model') + 1], 'sonnet')
+  assert.equal(second.args[second.args.indexOf('--effort') + 1], 'high')
   assert.equal(r.newBranch, false)
   assert.equal(r.commits.length, 1, 'seuls les commits de CE message sont listes')
   assert.equal(r.pushed, true)
@@ -124,6 +126,7 @@ test('erreurs : message vide ou trop long, session / modele invalides, branche p
   await rejects(h['ai.chat'](ctx(chat(bare, { sessionId: '-r-12345678' }))), /session invalide/)
   await rejects(h['ai.chat'](ctx(chat(bare, { model: 'a b; rm -rf /' }))), /Modele invalide/)
   await rejects(h['ai.chat'](ctx(chat(bare, { model: '--dangerously-skip-permissions' }))), /Modele invalide/)
+  for (const effort of ['--dangerously-skip-permissions', 'extreme', 'HIGH', 42]) await rejects(h['ai.chat'](ctx(chat(bare, { effort }))), /effort invalide/)
   await rejects(h['ai.chat'](ctx(chat(bare, { branch: 'main' }))), /jamais directement/)
   await rejects(h['ai.chat'](ctx(chat(bare, { prompt: 'CRASH' }))), /code 3.*pas connecte/)
   await rejects(h['ai.chat'](ctx(chat(bare, { prompt: 'ERROR' }))), /Not logged in/)
@@ -154,4 +157,30 @@ test('le projet reste protege du nettoyage pendant la requete', async () => {
   const swept = await g.sweep(0) // « tout est vieux » : le projet en cours ne doit pas etre touche
   assert.deepEqual(swept.removed, [])
   await rejects(p, /annulee/)
+})
+
+test('activite en direct : pensee, outils et texte remontent en evenements types', async () => {
+  const bare = remote()
+  const { h } = setup()
+  const typed: { kind?: string; text: string }[] = []
+  await h['ai.chat'](ctx(chat(bare), [], undefined, typed))
+  const steps = typed.filter((e) => e.kind && e.kind !== 'info')
+  assert.deepEqual(steps.map((e) => e.kind), ['thinking', 'tool', 'text'])
+  assert.match(steps[0].text, /lire le fichier/)
+  assert.equal(steps[1].text, 'Lecture de a.txt', 'chemin relatif au dossier de travail, pas absolu')
+  assert.equal(steps[2].text, 'Je vais ajouter un fichier.')
+})
+
+test('traduction des evenements du flux de Claude', () => {
+  const cwd = String.raw`C:\Users\moi\ws\p\branches\b`
+  const ev = (content: unknown[]) => ({ type: 'assistant', message: { content } })
+  assert.deepEqual(describeStreamEvent(ev([{ type: 'tool_use', name: 'Edit', input: { file_path: String.raw`${cwd}\src\main.lua` } }]), cwd), [{ kind: 'tool', text: 'Modification de src/main.lua' }])
+  assert.deepEqual(describeStreamEvent(ev([{ type: 'tool_use', name: 'Grep', input: { pattern: 'Player' } }]), cwd), [{ kind: 'tool', text: 'Recherche : Player' }])
+  assert.deepEqual(describeStreamEvent(ev([{ type: 'tool_use', name: 'Bash', input: { command: 'git status' } }]), cwd), [{ kind: 'tool', text: 'Commande : git status' }])
+  assert.deepEqual(describeStreamEvent(ev([{ type: 'tool_use', name: 'MonOutil', input: {} }]), cwd), [{ kind: 'tool', text: 'MonOutil' }])
+  assert.deepEqual(describeStreamEvent(ev([{ type: 'thinking', thinking: '  reflexion  ' }, { type: 'redacted_thinking', data: 'x' }, { type: 'text', text: '   ' }]), cwd), [{ kind: 'thinking', text: 'reflexion' }])
+  assert.equal(describeStreamEvent(ev([{ type: 'text', text: 'x'.repeat(9000) }]), cwd)[0].text.length, 6000)
+  for (const other of [{ type: 'user', message: { content: [] } }, { type: 'system', subtype: 'init' }, { type: 'result' }, null, 'texte', { type: 'assistant', message: {} }]) {
+    assert.deepEqual(describeStreamEvent(other, cwd), [])
+  }
 })

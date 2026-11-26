@@ -2,11 +2,16 @@
 // le Host stocke ici le texte, les commits et le diff qu'elles renvoient. Tout est rattache a un projet (donc a son proprietaire).
 import type { Db } from './db.ts'
 import { slugify } from './projects.ts'
-import { getJob, type JobStatus } from './workers.ts'
+import { getJob, type EventKind, type JobEvent, type JobStatus } from './workers.ts'
+
+/** Etat d'un chat dans la liste : reponse en cours, en attente d'un Worker, reponse non lue, echec non lu, ou rien a signaler. */
+export type ChatState = 'running' | 'queued' | 'unread' | 'error' | 'idle'
 
 export interface Chat {
   id: number; project_id: number; title: string; branch: string; session_id: string | null
   worker_id: number | null; worker_name: string | null; created_at: number; updated_at: number; message_count: number
+  model: string | null; effort: string | null; seen_message_id: number
+  state: ChatState
 }
 export interface ChatDetails {
   branch?: string; head?: string; commits?: string[]; diffStat?: string; diff?: string
@@ -20,16 +25,49 @@ export interface ChatMessage {
 
 export const MAX_TITLE = 80
 export const MAX_PROMPT = 20_000
+export const DEFAULT_TITLE = 'Nouveau chat'
+
+/** Choix proposes a l'utilisateur (la valeur vide = reglage par defaut du CLI). */
+export const MODELS: { value: string; label: string }[] = [
+  { value: '', label: 'Modele par defaut' }, { value: 'fable', label: 'Fable' }, { value: 'opus', label: 'Opus' },
+  { value: 'sonnet', label: 'Sonnet' }, { value: 'haiku', label: 'Haiku' },
+]
+export const EFFORTS: { value: string; label: string }[] = [
+  { value: '', label: 'Effort par defaut' }, { value: 'low', label: 'Faible' }, { value: 'medium', label: 'Moyen' },
+  { value: 'high', label: 'Eleve' }, { value: 'xhigh', label: 'Tres eleve' }, { value: 'max', label: 'Maximum' },
+]
+export const modelOk = (v: string) => MODELS.some((m) => m.value === v)
+export const effortOk = (v: string) => EFFORTS.some((m) => m.value === v)
 
 const CHAT_SELECT = `SELECT c.id, c.project_id, c.title, c.branch, c.session_id, c.worker_id, w.name AS worker_name, c.created_at, c.updated_at,
-  (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count
+  c.model, c.effort, c.seen_message_id,
+  (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count,
+  (SELECT m.id FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_id,
+  (SELECT m.status FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_status,
+  (SELECT CASE WHEN j.id IS NULL THEN 'queued' ELSE j.status END FROM chat_messages m LEFT JOIN jobs j ON j.id = m.job_id
+     WHERE m.chat_id = c.id AND m.status = 'pending' ORDER BY m.id DESC LIMIT 1) AS pending_job_status
   FROM chats c LEFT JOIN workers w ON w.id = c.worker_id`
 
-export const listChats = (db: Db, projectId: number) =>
-  db.prepare(`${CHAT_SELECT} WHERE c.project_id = ? ORDER BY c.updated_at DESC, c.id DESC`).all(projectId) as unknown as Chat[]
+type ChatRow = Omit<Chat, 'state'> & { last_done_id: number | null; last_done_status: string | null; pending_job_status: string | null }
 
-export const getChat = (db: Db, projectId: number, id: number) =>
-  db.prepare(`${CHAT_SELECT} WHERE c.id = ? AND c.project_id = ?`).get(id, projectId) as unknown as Chat | undefined
+function toChat(r: ChatRow): Chat {
+  const { last_done_id, last_done_status, pending_job_status, ...chat } = r
+  let state: ChatState = 'idle'
+  if (pending_job_status === 'running') state = 'running'
+  else if (pending_job_status === 'queued') state = 'queued'
+  else if (pending_job_status === 'succeeded') state = 'unread' // terminee, reponse pas encore reportee dans le chat
+  else if (pending_job_status === 'failed') state = 'error'
+  else if (last_done_id !== null && last_done_id > chat.seen_message_id) state = last_done_status === 'done' ? 'unread' : last_done_status === 'failed' ? 'error' : 'idle'
+  return { ...chat, state }
+}
+
+export const listChats = (db: Db, projectId: number) =>
+  (db.prepare(`${CHAT_SELECT} WHERE c.project_id = ? ORDER BY c.updated_at DESC, c.id DESC`).all(projectId) as unknown as ChatRow[]).map(toChat)
+
+export const getChat = (db: Db, projectId: number, id: number) => {
+  const r = db.prepare(`${CHAT_SELECT} WHERE c.id = ? AND c.project_id = ?`).get(id, projectId) as unknown as ChatRow | undefined
+  return r ? toChat(r) : undefined
+}
 
 export function titleProblem(title: string): string | null {
   if (!title) return 'Donne un titre au chat.'
@@ -38,14 +76,36 @@ export function titleProblem(title: string): string | null {
   return null
 }
 
+const branchFor = (id: number, title: string) => `ai/chat-${id}-${slugify(title).slice(0, 30).replace(/-+$/, '') || 'chat'}`
+
 // Chaque chat a sa branche : « ai/chat-<id>-<titre> » (le numero la rend unique et stable, meme si deux chats ont le meme titre).
-export function createChat(db: Db, projectId: number, title: string): Chat {
+export function createChat(db: Db, projectId: number, title: string = DEFAULT_TITLE): Chat {
   const now = Date.now()
   const r = db.prepare("INSERT INTO chats (project_id, title, branch, created_at, updated_at) VALUES (?, ?, '', ?, ?)").run(projectId, title, now, now)
   const id = Number(r.lastInsertRowid)
-  const slug = slugify(title).slice(0, 30).replace(/-+$/, '') || 'chat'
-  db.prepare('UPDATE chats SET branch = ? WHERE id = ?').run(`ai/chat-${id}-${slug}`, id)
+  db.prepare('UPDATE chats SET branch = ? WHERE id = ?').run(branchFor(id, title), id)
   return getChat(db, projectId, id)!
+}
+
+export const renameChat = (db: Db, projectId: number, id: number, title: string) =>
+  Number(db.prepare('UPDATE chats SET title = ? WHERE id = ? AND project_id = ?').run(title, id, projectId).changes) > 0
+
+/** Premier message d'un chat encore intitule « Nouveau chat » : le titre (et la branche, pas encore utilisee) en sont deduits. */
+export function titleFromFirstMessage(db: Db, chat: Chat, prompt: string) {
+  if (chat.title !== DEFAULT_TITLE || chat.message_count > 0) return
+  const first = prompt.split('\n').find((l) => l.trim())?.trim().replace(/\s+/g, ' ') ?? ''
+  const title = first.length > 60 ? `${first.slice(0, 59).trimEnd()}…` : first
+  if (!title || titleProblem(title)) return
+  db.prepare('UPDATE chats SET title = ?, branch = ? WHERE id = ?').run(title, branchFor(chat.id, title), chat.id)
+}
+
+export function setChatPrefs(db: Db, chatId: number, model: string, effort: string) {
+  db.prepare('UPDATE chats SET model = ?, effort = ? WHERE id = ?').run(model || null, effort || null, chatId)
+}
+
+/** L'utilisateur a vu tout ce qui est termine dans ce chat : plus de point « non lu ». */
+export function markSeen(db: Db, chatId: number) {
+  db.prepare("UPDATE chats SET seen_message_id = (SELECT COALESCE(MAX(id), 0) FROM chat_messages WHERE chat_id = ? AND status != 'pending') WHERE id = ?").run(chatId, chatId)
 }
 
 export const deleteChat = (db: Db, projectId: number, id: number) =>
@@ -61,6 +121,19 @@ export function listMessages(db: Db, chatId: number): ChatMessage[] {
     try { details = details_json ? (JSON.parse(details_json) as ChatDetails) : null } catch { /* illisible */ }
     return { ...m, details }
   })
+}
+
+/** Activite (pensee, outils, texte) des taches d'un chat, regroupee par tache. */
+export function activityByJob(db: Db, jobIds: number[]): Map<number, JobEvent[]> {
+  const out = new Map<number, JobEvent[]>()
+  if (!jobIds.length) return out
+  const rows = db.prepare(`SELECT job_id, id, at, level, text, kind FROM job_events WHERE job_id IN (${jobIds.map(() => '?').join(',')}) ORDER BY id`).all(...jobIds) as unknown as
+    (JobEvent & { job_id: number; kind: EventKind | null })[]
+  for (const { job_id, kind, ...e } of rows) {
+    if (!out.has(job_id)) out.set(job_id, [])
+    out.get(job_id)!.push({ ...e, kind: kind ?? 'info' })
+  }
+  return out
 }
 
 export const hasPendingReply = (db: Db, chatId: number) =>

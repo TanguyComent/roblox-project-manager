@@ -32,6 +32,47 @@ const MAX_TEXT = 40_000
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,63}$/
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+const EFFORT = ['low', 'medium', 'high', 'xhigh', 'max']
+
+type Step = { kind: 'thinking' | 'tool' | 'text'; text: string }
+
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+
+// Chemins affiches relativement au dossier de travail (pas de chemin absolu de la machine dans les journaux).
+function relPath(p: unknown, cwd: string): string {
+  const s = String(p ?? '').replace(/\\/g, '/')
+  const base = cwd.replace(/\\/g, '/').replace(/\/+$/, '')
+  return s.toLowerCase().startsWith(`${base.toLowerCase()}/`) ? s.slice(base.length + 1) : s
+}
+
+function toolSummary(name: string, input: Record<string, unknown>, cwd: string): string {
+  switch (name) {
+    case 'Read': return `Lecture de ${relPath(input.file_path, cwd)}`
+    case 'Edit': case 'MultiEdit': return `Modification de ${relPath(input.file_path, cwd)}`
+    case 'Write': return `Ecriture de ${relPath(input.file_path, cwd)}`
+    case 'NotebookEdit': return `Modification de ${relPath(input.notebook_path, cwd)}`
+    case 'Glob': return `Recherche de fichiers : ${String(input.pattern ?? '')}`
+    case 'Grep': return `Recherche : ${String(input.pattern ?? '')}`
+    case 'Bash': case 'PowerShell': return `Commande : ${String(input.command ?? '')}`
+    case 'Task': case 'Agent': return `Sous-agent : ${String(input.description ?? '')}`
+    case 'TodoWrite': return 'Mise a jour de la liste de taches'
+    default: return name
+  }
+}
+
+/** Etapes visibles d'un evenement du flux `--output-format stream-json` : pensee, appel d'outil, texte. Le reste est ignore. */
+export function describeStreamEvent(obj: unknown, cwd: string): Step[] {
+  const j = obj as { type?: string; message?: { content?: unknown } }
+  if (j?.type !== 'assistant' || !Array.isArray(j.message?.content)) return []
+  const steps: Step[] = []
+  for (const b of j.message!.content as Record<string, unknown>[]) {
+    if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) steps.push({ kind: 'thinking', text: clip(b.thinking.trim(), 8000) })
+    else if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) steps.push({ kind: 'text', text: clip(b.text.trim(), 6000) })
+    else if (b.type === 'tool_use' && typeof b.name === 'string') steps.push({ kind: 'tool', text: clip(toolSummary(b.name, (b.input ?? {}) as Record<string, unknown>, cwd), 300) })
+  }
+  return steps
+}
+
 const field = (p: unknown, key: string): unknown => (p && typeof p === 'object' ? (p as Record<string, unknown>)[key] : undefined)
 
 interface ClaudeResult { text: string; sessionId: string | null; costUsd: number | null; durationMs: number | null; turns: number | null }
@@ -64,7 +105,7 @@ function killTree(pid: number | undefined) {
   else { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* deja termine */ } } }
 }
 
-function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx: Pick<JobContext, 'signal'>, timeoutMs: number): Promise<string> {
+function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx: Pick<JobContext, 'signal'>, timeoutMs: number, onLine?: (obj: unknown) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     // Sous Windows, `claude` est souvent un script .cmd (npm) : il faut un shell. Les arguments sont des constantes ou des valeurs validees ; le prompt passe par stdin.
     const viaShell = process.platform === 'win32' && cmd === 'claude'
@@ -72,17 +113,37 @@ function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx
     const child = spawn(cmd, finalArgs, { cwd, shell: viaShell, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
+    let pendingLine = ''
+    let lastResult = ''
     let done = false
+    // Flux : une ligne JSON par evenement. On les transmet au fur et a mesure et on garde la ligne « result » finale.
+    const handleLine = (line: string) => {
+      const t = line.trim()
+      if (!t.startsWith('{')) return
+      try {
+        const obj = JSON.parse(t) as { type?: string }
+        if (obj.type === 'result') lastResult = t
+        onLine?.(obj)
+      } catch { /* ligne partielle ou illisible : ignoree */ }
+    }
     const finish = (fn: () => void) => { if (done) return; done = true; clearTimeout(timer); ctx.signal.removeEventListener('abort', onAbort); fn() }
     const onAbort = () => { killTree(child.pid); finish(() => reject(new JobCancelled())) }
     const timer = setTimeout(() => { killTree(child.pid); finish(() => reject(new GitError(`Claude n'a pas termine en ${Math.round(timeoutMs / 60000)} min : interrompu.`))) }, timeoutMs)
     if (ctx.signal.aborted) return onAbort()
     ctx.signal.addEventListener('abort', onAbort, { once: true })
-    child.stdout.on('data', (d: Buffer) => { if (out.length < 8_000_000) out += d.toString('utf8') })
+    child.stdout.on('data', (d: Buffer) => {
+      const text = d.toString('utf8')
+      if (out.length < 2_000_000) out += text
+      pendingLine += text
+      const lines = pendingLine.split('\n')
+      pendingLine = lines.pop() ?? ''
+      for (const l of lines) handleLine(l)
+    })
     child.stderr.on('data', (d: Buffer) => { if (err.length < 20_000) err += d.toString('utf8') })
     child.on('error', (e: NodeJS.ErrnoException) => finish(() => reject(new GitError(e.code === 'ENOENT' ? "Le CLI « claude » est introuvable sur cette machine." : `Impossible de lancer Claude : ${e.message}`))))
     child.on('close', (code) => finish(() => {
-      if (code === 0) return resolve(out)
+      handleLine(pendingLine)
+      if (code === 0) return resolve(lastResult || out)
       // Claude ecrit parfois son erreur en JSON sur stdout : on la lit pour un message utile.
       let detail = err.trim() || out.trim()
       try { const j = JSON.parse(out.trim()) as { result?: unknown }; if (typeof j.result === 'string') detail = j.result } catch { /* texte brut */ }
@@ -110,8 +171,10 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
       if (prompt.length > MAX_PROMPT) throw new GitError(`Message trop long (${MAX_PROMPT} caracteres maximum).`)
       const sessionId = field(ctx.payload, 'sessionId')
       if (sessionId !== undefined && sessionId !== null && (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId))) throw new GitError('Identifiant de session invalide.')
+      const effort = field(ctx.payload, 'effort')
+      if (effort !== undefined && effort !== null && effort !== '' && !EFFORT.includes(effort as string)) throw new GitError('Niveau d\'effort invalide.')
       const model = field(ctx.payload, 'model')
-      if (model !== undefined && model !== null && (typeof model !== 'string' || !MODEL.test(model))) throw new GitError('Modele invalide.')
+      if (model !== undefined && model !== null && model !== '' && (typeof model !== 'string' || !MODEL.test(model))) throw new GitError('Modele invalide.')
       const project = String(field(ctx.payload, 'project') ?? '')
       const branch = String(field(ctx.payload, 'branch') ?? '')
       const push = field(ctx.payload, 'push') !== false
@@ -130,11 +193,12 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         try {
           const settings = join(dir, 'settings.json')
           writeFileSync(settings, JSON.stringify({ permissions: { allow: o.allow ?? DEFAULT_ALLOW, deny: o.deny ?? DEFAULT_DENY } }))
-          const args = [...claude.args, '-p', '--output-format', 'json', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings]
+          const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings]
           if (sessionId) args.push('--resume', sessionId as string)
           if (model) args.push('--model', model as string)
+          if (effort) args.push('--effort', effort as string)
           ctx.event('info', sessionId ? 'Claude reprend la conversation…' : 'Claude demarre…')
-          result = parseClaudeOutput(await runClaude(claude.cmd, args, cwd, contextBlock(branch) + prompt, ctx, o.timeoutMs ?? 30 * 60_000))
+          result = parseClaudeOutput(await runClaude(claude.cmd, args, cwd, contextBlock(branch) + prompt, ctx, o.timeoutMs ?? 30 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, cwd)) ctx.event('info', s.text, s.kind) }))
         } finally { rmSync(dir, { recursive: true, force: true }) }
 
         // 3. ce qui a change : un travail oublie en cours de route est commite pour ne rien perdre

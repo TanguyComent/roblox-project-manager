@@ -5,7 +5,7 @@ export interface JobContext {
   payload: unknown
   /** Declenche quand le Host annule la tache ou que la connexion est perdue : l'executeur doit s'arreter vite. */
   signal: AbortSignal
-  event(level: 'info' | 'warn' | 'error', text: string): void
+  event(level: 'info' | 'warn' | 'error', text: string, kind?: 'info' | 'thinking' | 'tool' | 'text'): void
 }
 export type JobHandler = (ctx: JobContext) => Promise<unknown>
 

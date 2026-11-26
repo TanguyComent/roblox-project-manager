@@ -18,7 +18,8 @@ export interface Job {
   status: JobStatus; result: unknown; error: string | null
   created_at: number; started_at: number | null; finished_at: number | null
 }
-export interface JobEvent { id: number; at: number; level: string; text: string }
+export type EventKind = 'info' | 'thinking' | 'tool' | 'text'
+export interface JobEvent { id: number; at: number; level: string; text: string; kind: EventKind }
 
 const now = () => Date.now()
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,39}$/u
@@ -172,15 +173,18 @@ export function finishJob(db: Db, jobId: number, status: Exclude<JobStatus, 'que
 export const runningJobOf = (db: Db, workerId: number) =>
   db.prepare(`SELECT id, user_id FROM jobs WHERE worker_id = ? AND status = 'running'`).get(workerId) as unknown as { id: number; user_id: number } | undefined
 
-const MAX_EVENTS_PER_JOB = 200
-export function addJobEvent(db: Db, jobId: number, level: string, text: string) {
+const MAX_EVENTS_PER_JOB = 500
+const MAX_TEXT: Record<EventKind, number> = { info: 2000, tool: 400, text: 6000, thinking: 8000 }
+export function addJobEvent(db: Db, jobId: number, level: string, text: string, kind?: string) {
   const n = (db.prepare('SELECT COUNT(*) AS n FROM job_events WHERE job_id = ?').get(jobId) as { n: number }).n
   if (n >= MAX_EVENTS_PER_JOB) return
-  db.prepare('INSERT INTO job_events (job_id, at, level, text) VALUES (?, ?, ?, ?)')
-    .run(jobId, now(), ['info', 'warn', 'error'].includes(level) ? level : 'info', String(text).slice(0, 2000))
+  const k: EventKind = kind === 'thinking' || kind === 'tool' || kind === 'text' ? kind : 'info'
+  db.prepare('INSERT INTO job_events (job_id, at, level, text, kind) VALUES (?, ?, ?, ?, ?)')
+    .run(jobId, now(), ['info', 'warn', 'error'].includes(level) ? level : 'info', String(text).slice(0, MAX_TEXT[k]), k)
 }
-export const listJobEvents = (db: Db, jobId: number, limit = 100) =>
-  db.prepare('SELECT id, at, level, text FROM job_events WHERE job_id = ? ORDER BY id LIMIT ?').all(jobId, limit) as unknown as JobEvent[]
+export const listJobEvents = (db: Db, jobId: number, limit = 500) =>
+  (db.prepare('SELECT id, at, level, text, kind FROM job_events WHERE job_id = ? ORDER BY id LIMIT ?').all(jobId, limit) as unknown as (Omit<JobEvent, 'kind'> & { kind: EventKind | null })[])
+    .map((e) => ({ ...e, kind: e.kind ?? 'info' }))
 
 // Au redemarrage du Host plus aucun Worker n'est connecte : les taches « en cours » ne peuvent plus aboutir.
 export function failOrphanedJobs(db: Db): number {

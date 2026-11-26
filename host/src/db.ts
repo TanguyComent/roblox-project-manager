@@ -190,6 +190,11 @@ const MIGRATIONS = [
      created_at INTEGER NOT NULL
    );
    CREATE INDEX chat_messages_chat ON chat_messages(chat_id, id);`,
+  // 10 : activite typee des taches (pensee, outils), modele / effort et etat « lu » des chats
+  `ALTER TABLE job_events ADD COLUMN kind TEXT;
+   ALTER TABLE chats ADD COLUMN model TEXT;
+   ALTER TABLE chats ADD COLUMN effort TEXT;
+   ALTER TABLE chats ADD COLUMN seen_message_id INTEGER NOT NULL DEFAULT 0;`,
 ]
 
 export function openDb(file?: string): Db {

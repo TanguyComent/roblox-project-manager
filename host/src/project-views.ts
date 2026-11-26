@@ -194,16 +194,17 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
     .map((k) => `<option value="${k}"${(k === 'release' || k === 'dev') && has(k) ? ' disabled' : ''}>${KIND_LABEL[k]}${(k === 'release' || k === 'dev') && has(k) ? ' (deja ajoutee)' : ''}</option>`).join('')
   return appPage(p.name, o, 'projects', `
 <p class="crumbs"><a href="/projects">Projets</a> <span aria-hidden="true">/</span> ${esc(p.name)}</p>
+<nav class="tabs" aria-label="Sections du projet"><a href="/projects/${p.id}" class="active" aria-current="page">Apercu</a><a href="/projects/${p.id}/chats">Chats IA</a></nav>
 <section class="card">
   <div class="card-head">
     <div><h1>${esc(p.name)}</h1><p class="muted">${groupText(p)}</p></div>
+    <a class="button primary" href="/projects/${p.id}/chats">Discuter avec l'IA</a>
   </div>
   ${alert(o.notice, 'ok')}${alert(o.error)}
   <dl class="facts">
     <dt>Compte Roblox</dt><dd>${(() => { const acc = o.accounts.find((a) => a.id === p.roblox_account_id); return acc ? `${esc(acc.label)}${acc.invalid ? ' <span class="pill warn">Cle invalide</span>' : ''}` : '<span class="muted">Aucun</span>' })()}</dd>
     <dt>Depot GitHub</dt><dd>${repoLink(p.github_repo)}</dd>
     <dt>Identifiant</dt><dd><code>${esc(p.slug)}</code></dd>
-    <dt>Chats IA</dt><dd><a href="/projects/${p.id}/chats">Ouvrir les chats du projet</a></dd>
   </dl>
   <details class="edit">
     <summary>Modifier le projet</summary>

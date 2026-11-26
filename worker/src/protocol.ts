@@ -7,7 +7,7 @@ export type WorkerMessage =
   | { type: 'hello'; token: string; protocol: number; version: string; info: Record<string, unknown>; capabilities?: Capability[] }
   | { type: 'capabilities'; capabilities: Capability[] }
   | { type: 'heartbeat'; busyJobId: number | null }
-  | { type: 'event'; jobId: number; level: 'info' | 'warn' | 'error'; text: string }
+  | { type: 'event'; jobId: number; level: 'info' | 'warn' | 'error'; text: string; kind?: 'info' | 'thinking' | 'tool' | 'text' }
   | { type: 'result'; jobId: number; ok: boolean; cancelled?: boolean; output?: unknown; error?: string }
 
 // Host -> Worker

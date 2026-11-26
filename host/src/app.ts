@@ -54,7 +54,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   // --- en-tetes de securite -------------------------------------------------------------------------------------------------
   app.use('*', async (c, next) => {
     await next()
-    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'same-origin')
     c.header('X-Frame-Options', 'DENY')
@@ -130,6 +130,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   }
   app.get('/static/app.css', asset('app.css', 'text/css'))
   app.get('/static/app.js', asset('app.js', 'text/javascript'))
+  app.get('/static/chat.js', asset('chat.js', 'text/javascript'))
   app.get('/healthz', (c) => c.json({ ok: true }))
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))

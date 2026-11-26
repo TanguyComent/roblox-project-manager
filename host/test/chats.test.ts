@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import { serve } from '@hono/node-server'
 import { createUser } from '../src/auth.ts'
-import { createChat, getChat, listMessages } from '../src/chats.ts'
+import { createChat, deleteChat, getChat, listChats, listMessages, renameChat } from '../src/chats.ts'
 import { createProject } from '../src/projects.ts'
 import { createWorker, deleteWorker, getJob } from '../src/workers.ts'
 import { startWorker, type RunningWorker } from '../../worker/src/worker.ts'
@@ -19,7 +19,7 @@ async function waitFor(cond: () => boolean, what: string, ms = 4000) {
   }
 }
 
-type Payload = { project: string; url: string; branch: string; prompt: string; sessionId: string | null; push: boolean }
+type Payload = { project: string; url: string; branch: string; prompt: string; sessionId: string | null; push: boolean; model: string | null; effort: string | null }
 
 async function setup(repo: string | null = 'acme/jeu') {
   const c = client()
@@ -38,6 +38,9 @@ async function setup(repo: string | null = 'acme/jeu') {
     const p = payload as Payload
     payloads.push(p)
     event('info', 'Claude demarre…')
+    event('info', 'Je dois <b>reflechir</b> au probleme', 'thinking')
+    event('info', 'Lecture de a.txt', 'tool')
+    event('info', 'Je commence par regarder.', 'text')
     if (p.prompt.includes('BOOM')) throw new Error('Claude n\'est pas connecte.')
     if (p.prompt.includes('SLOW')) {
       await new Promise<void>((resolve, reject) => { const t = setTimeout(resolve, 30_000); signal.addEventListener('abort', () => { clearTimeout(t); reject(new JobCancelled()) }) })
@@ -90,9 +93,14 @@ test('les pages de chats exigent une session complete et un jeton CSRF', async (
 test('creer, lister, ouvrir et supprimer un chat ; chaque chat a sa branche', async () => {
   const t = await setup()
   try {
-    assert.match((await t.c.call('GET', t.base)).text, /Aucun chat/)
-    assert.equal((await t.post('', { title: '   ' })).res.status, 400)
+    assert.match((await t.c.call('GET', t.base)).text, /Creer le premier chat/)
     assert.equal((await t.post('', { title: 'x'.repeat(81) })).res.status, 400)
+    // titre vide : un chat « Nouveau chat » (le titre sera deduit du premier message)
+    const blank = await t.post('', { title: '   ' })
+    assert.equal(blank.res.status, 303)
+    const blankChat = getChat(t.c.db, t.project.id, Number(/chats\/(\d+)/.exec(blank.res.headers.get('location')!)![1]))!
+    assert.equal(blankChat.title, 'Nouveau chat')
+    assert.equal(deleteChat(t.c.db, t.project.id, blankChat.id), true)
 
     const a = await t.post('', { title: 'Ajouter l\'inventaire !' })
     assert.equal(a.res.status, 303)
@@ -103,18 +111,18 @@ test('creer, lister, ouvrir et supprimer un chat ; chaque chat a sa branche', as
     assert.match(chatA.branch, /^ai\/chat-\d+-ajouter-l-inventaire$/)
     assert.notEqual(chatA.branch, chatB.branch, 'deux chats de meme titre : deux branches')
 
-    const list = (await t.c.call('GET', t.base)).text
+    const list = (await t.c.call('GET', `${t.base}/${ida}`)).text // la liste des chats est a gauche de chaque chat
     assert.match(list, /Ajouter l&#39;inventaire|Ajouter l'inventaire/)
     assert.ok(list.includes(chatA.branch))
     const open = await t.c.call('GET', `${t.base}/${ida}`)
     assert.equal(open.res.status, 200)
-    assert.match(open.text, /Pose ta premiere question/)
+    assert.match(open.text, /Que veux-tu faire/)
 
     assert.equal((await t.post(`/${ida}/delete`)).res.status, 303)
     assert.equal(getChat(t.c.db, t.project.id, ida), undefined)
     assert.ok(getChat(t.c.db, t.project.id, idb), "l'autre chat reste")
     assert.equal((await t.c.call('GET', `${t.base}/${ida}`)).res.status, 404)
-    assert.match((await t.c.call('GET', `${t.base}?n=deleted`)).text, /Chat supprime/)
+    assert.equal((await t.c.call('GET', t.base)).res.headers.get('location'), `${t.base}/${idb}`, 'sans chat choisi : le plus recent est ouvert')
   } finally { await t.close() }
 })
 
@@ -172,7 +180,8 @@ test('sans Worker equipe (Git + Claude Code) le message attend, puis part des qu
     const waiting = await t.page(chat.id)
     assert.match(waiting, /En attente d&#39;un Worker|En attente d'un Worker/)
     assert.match(waiting, /Aucun Worker connecte/)
-    assert.match(waiting, /http-equiv="refresh"/)
+    assert.match(waiting, /data-pending="true"/)
+    assert.match(waiting, /data-live="[^"]*\/live"/)
     assert.equal(t.payloads.length, 0)
 
     // une seule reponse a la fois
@@ -319,5 +328,201 @@ test('le projet propose le lien vers ses chats', async () => {
   const t = await setup()
   try {
     assert.ok((await t.c.call('GET', `/projects/${t.project.id}`)).text.includes(`/projects/${t.project.id}/chats`))
+  } finally { await t.close() }
+})
+
+test('pastilles : en attente, en cours, reponse non lue, echec, puis lu en ouvrant le chat', async () => {
+  const t = await setup()
+  try {
+    const state = (id: number) => listChats(t.c.db, t.project.id).find((c) => c.id === id)!.state
+    const chat = createChat(t.c.db, t.project.id, 'Etats')
+    assert.equal(state(chat.id), 'idle')
+
+    await t.send(chat.id, 'Bonjour') // aucun Worker : en attente
+    assert.equal(state(chat.id), 'queued')
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    await waitFor(() => state(chat.id) === 'unread', 'reponse non lue') // terminee, personne n'a regarde
+    await t.page(chat.id)
+    assert.equal(state(chat.id), 'idle', 'ouvrir le chat marque la reponse comme lue')
+
+    await t.send(chat.id, 'SLOW 1')
+    await waitFor(() => state(chat.id) === 'running', 'en cours')
+    await t.post(`/${chat.id}/cancel`)
+    await waitFor(() => listMessages(t.c.db, chat.id)[3].job_status === 'cancelled', 'annulee')
+    await t.page(chat.id)
+    assert.equal(state(chat.id), 'idle', 'une annulation ne declenche pas de pastille')
+
+    await t.send(chat.id, 'BOOM')
+    await waitFor(() => state(chat.id) === 'error', 'echec non lu')
+    await t.page(chat.id)
+    assert.equal(state(chat.id), 'idle')
+
+    // depuis un AUTRE chat, la pastille du premier est visible dans la liste de gauche
+    const other = createChat(t.c.db, t.project.id, 'Autre')
+    await t.send(chat.id, 'Encore')
+    await waitFor(() => state(chat.id) === 'unread', 'non lu')
+    const html = await t.page(other.id)
+    assert.match(html, /chat-item is-unread/)
+    assert.match(html, /dot unread/)
+  } finally { await t.close() }
+})
+
+test('endpoint live : fragments HTML, compteur de non lus, jamais mis en cache', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Direct')
+    const live = `${t.base}/${chat.id}/live`
+    const idle = await t.c.call('GET', live, undefined, { accept: 'application/json' })
+    assert.equal(idle.res.status, 200)
+    assert.match(idle.res.headers.get('cache-control') ?? '', /no-store/)
+    const j0 = JSON.parse(idle.text) as { list: string; thread: string; pending: boolean; unread: number; title: string }
+    assert.equal(j0.pending, false)
+    assert.equal(j0.title, 'Direct')
+    assert.match(j0.thread, /Que veux-tu faire/)
+    assert.match(j0.list, /Direct/)
+
+    await t.send(chat.id, 'Bonjour')
+    await waitFor(() => listMessages(t.c.db, chat.id)[1].job_status === 'succeeded', 'reponse')
+    const done = JSON.parse((await t.c.call('GET', live)).text) as typeof j0
+    assert.equal(done.pending, false)
+    assert.match(done.thread, /Reponse 1/)
+    assert.equal(done.unread, 0, 'le chat ouvert est lu')
+
+    const other = createChat(t.c.db, t.project.id, 'Autre')
+    await t.send(chat.id, 'Encore')
+    await waitFor(() => listMessages(t.c.db, chat.id)[3].job_status === 'succeeded', '2e reponse')
+    const fromOther = JSON.parse((await t.c.call('GET', `${t.base}/${other.id}/live`)).text) as typeof j0
+    assert.equal(fromOther.unread, 1, "la reponse du premier chat est signalee depuis l'autre")
+    assert.match(fromOther.list, /dot unread/)
+
+    // pas de fuite : le live d'un chat qui n'est pas a moi
+    const intruder = await createUser(t.c.db, 'autre@example.com', 'correct horse battery')
+    const theirs = createChat(t.c.db, createProject(t.c.db, intruder.id, { name: 'X', groupId: null, groupName: null, githubRepo: 'x/y', robloxAccountId: null }).id, 'Prive')
+    assert.equal((await t.c.call('GET', `${t.base}/${theirs.id}/live`)).res.status, 404)
+  } finally { await t.close() }
+})
+
+test('modele et effort : memorises par chat, transmis au Worker, valeurs inconnues refusees', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Reglages')
+    const first = await t.send(chat.id, 'Un')
+    assert.equal(first.res.status, 303)
+    await t.settle(chat.id)
+    assert.deepEqual([t.payloads[0].model, t.payloads[0].effort], [null, null], 'sans choix : valeurs par defaut du CLI')
+
+    await t.post(`/${chat.id}/messages`, { prompt: 'Deux', model: 'opus', effort: 'high' })
+    await t.settle(chat.id)
+    assert.deepEqual([t.payloads[1].model, t.payloads[1].effort], ['opus', 'high'])
+    const html = await t.page(chat.id)
+    assert.match(html, /<option value="opus" selected>/)
+    assert.match(html, /<option value="high" selected>/)
+    assert.equal(getChat(t.c.db, t.project.id, chat.id)!.model, 'opus')
+
+    const badValues: Record<string, string>[] = [{ model: '--dangerously-skip-permissions' }, { model: 'gpt-9' }, { effort: 'extreme' }, { effort: '--x' }]
+    for (const bad of badValues) {
+      const r = await t.post(`/${chat.id}/messages`, { prompt: 'Mauvais', ...bad })
+      assert.equal(r.res.status, 400, JSON.stringify(bad))
+    }
+    assert.equal(t.payloads.length, 2, 'aucune tache pour des valeurs refusees')
+  } finally { await t.close() }
+})
+
+test('envoi sans rechargement : reponses JSON (succes, erreurs, une reponse a la fois)', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Ajax')
+    const json = { accept: 'application/json' }
+    const post = (path: string, body: Record<string, string>) => t.c.call('POST', `${t.base}/${chat.id}${path}`, { csrf: t.csrf, ...body }, json)
+
+    const empty = await post('/messages', { prompt: '  ' })
+    assert.equal(empty.res.status, 400)
+    assert.match((JSON.parse(empty.text) as { error: string }).error, /Ecris un message/)
+    const ok = await post('/messages', { prompt: 'SLOW 1' })
+    assert.equal(ok.res.status, 200)
+    assert.deepEqual(JSON.parse(ok.text), { ok: true })
+    const busy = await post('/messages', { prompt: 'Deux' })
+    assert.equal(busy.res.status, 409)
+    assert.match((JSON.parse(busy.text) as { error: string }).error, /deja en cours/)
+    assert.deepEqual(JSON.parse((await post('/cancel', {})).text), { ok: true })
+    const noCsrf = await t.c.call('POST', `${t.base}/${chat.id}/messages`, { prompt: 'x' }, json)
+    assert.equal(noCsrf.res.status, 403)
+    assert.ok(typeof (JSON.parse(noCsrf.text) as { error: string }).error === 'string')
+  } finally { await t.close() }
+})
+
+test('titre et branche deduits du premier message ; renommer ne change pas la branche', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id)
+    assert.equal(chat.title, 'Nouveau chat')
+    assert.match(chat.branch, /^ai\/chat-\d+-nouveau-chat$/)
+
+    await t.send(chat.id, "Corrige le bug de l'inventaire\nPlus de details ici")
+    await t.settle(chat.id)
+    const after = getChat(t.c.db, t.project.id, chat.id)!
+    assert.equal(after.title, "Corrige le bug de l'inventaire")
+    assert.equal(after.branch, `ai/chat-${chat.id}-corrige-le-bug-de-l-inventaire`)
+    assert.equal(t.payloads[0].branch, after.branch, 'la branche envoyee au Worker est celle deduite du titre')
+
+    await t.send(chat.id, 'Autre sujet completement')
+    await t.settle(chat.id)
+    assert.equal(getChat(t.c.db, t.project.id, chat.id)!.branch, after.branch, 'la branche est figee apres le premier message')
+
+    assert.equal((await t.post(`/${chat.id}/rename`, { title: 'Inventaire v2' })).res.status, 303)
+    const renamed = getChat(t.c.db, t.project.id, chat.id)!
+    assert.equal(renamed.title, 'Inventaire v2')
+    assert.equal(renamed.branch, after.branch)
+    assert.equal((await t.post(`/${chat.id}/rename`, { title: 'x'.repeat(81) })).res.status, 400)
+    assert.equal(renameChat(t.c.db, t.project.id, chat.id, 'Inventaire v2'), true)
+  } finally { await t.close() }
+})
+
+test("activite de l'IA affichee (pensee, outils, texte), echappee, et conservee apres la reponse", async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Activite')
+    await t.send(chat.id, 'Bonjour')
+    await t.settle(chat.id)
+    const html = await t.page(chat.id)
+    assert.match(html, /class="activity"/)
+    assert.match(html, /Activite · 4 etapes · pensee/)
+    assert.match(html, /step thinking/)
+    assert.match(html, /Je dois &lt;b&gt;reflechir&lt;\/b&gt; au probleme/)
+    assert.ok(!html.includes('<b>reflechir</b>'), "la pensee n'est jamais interpretee comme du HTML")
+    assert.match(html, /step tool[^]*Lecture de a\.txt/)
+    assert.match(html, /step text[^]*Je commence par regarder\./)
+    assert.match(html, /Claude demarre/)
+  } finally { await t.close() }
+})
+
+test('reponses en Markdown, scripts et CSP corrects', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Markdown')
+    await t.send(chat.id, 'Bonjour')
+    await t.settle(chat.id)
+    const page = await t.c.call('GET', `${t.base}/${chat.id}`)
+    assert.match(page.text, /<div class="answer md">/)
+    assert.match(page.res.headers.get('content-security-policy') ?? '', /connect-src 'self'/)
+    assert.doesNotMatch(page.res.headers.get('content-security-policy') ?? '', /unsafe-inline/)
+    const js = await t.c.call('GET', '/static/chat.js')
+    assert.equal(js.res.status, 200)
+    assert.match(js.res.headers.get('content-type') ?? '', /javascript/)
+    assert.match(page.text, /<script src="\/static\/chat\.js\?v=\d+" defer>/)
+    assert.ok(!/<script>[^<]/.test(page.text), 'aucun script en ligne')
   } finally { await t.close() }
 })

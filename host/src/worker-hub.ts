@@ -95,7 +95,7 @@ export class WorkerHub {
       return
     }
     if (msg.type === 'event') {
-      if (this.owns(conn, msg.jobId)) addJobEvent(this.db, msg.jobId, msg.level, msg.text)
+      if (this.owns(conn, msg.jobId)) addJobEvent(this.db, msg.jobId, msg.level, msg.text, msg.kind)
       return
     }
     if (msg.type === 'result') {

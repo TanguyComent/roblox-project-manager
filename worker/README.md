@@ -48,8 +48,8 @@ d'environnement (jamais en argument ni dans `.git/config`), limite a github.com,
 
 ## Requetes IA (`ai.chat`)
 
-Prepare la branche (voir ci-dessus), lance le CLI **Claude Code** dessus (`claude -p --output-format json`, conversation reprise avec `--resume`), commite ce que l'IA aurait oublie de commiter,
-pousse la branche, et renvoie la reponse, les commits et le diff. Il faut que `claude` soit installe et connecte sur cette machine (`npm install -g @anthropic-ai/claude-code`, puis `claude` une fois).
+Prepare la branche (voir ci-dessus), lance le CLI **Claude Code** dessus (`claude -p --output-format stream-json --verbose`, conversation reprise avec `--resume`, `--model` / `--effort` selon le chat), commite ce que l'IA aurait oublie de commiter,
+pousse la branche, et renvoie la reponse, les commits et le diff. Pendant l'execution, chaque etape de Claude (pensee, outil, texte) est transmise en direct au Host. Il faut que `claude` soit installe et connecte sur cette machine (`npm install -g @anthropic-ai/claude-code`, puis `claude` une fois).
 Le prompt passe par l'entree standard ; les droits de l'IA sont limites par un fichier de reglages : lecture / edition de fichiers, recherche et `git` (sans `push` ni `remote`), pas de reseau,
 et tout ce qui demanderait une autorisation est refuse (`--permission-prompts none`). Modifier `DEFAULT_ALLOW` / `DEFAULT_DENY` dans `src/ai.ts` pour changer ces droits.
 
