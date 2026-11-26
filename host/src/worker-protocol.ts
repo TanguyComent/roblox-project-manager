@@ -10,7 +10,8 @@ export type JobKind = (typeof JOB_KINDS)[number]
 
 // Worker -> Host
 export type WorkerMessage =
-  | { type: 'hello'; token: string; protocol: number; version: string; info: Record<string, unknown> }
+  | { type: 'hello'; token: string; protocol: number; version: string; info: Record<string, unknown>; capabilities?: Capability[] }
+  | { type: 'capabilities'; capabilities: Capability[] }
   | { type: 'heartbeat'; busyJobId: number | null }
   | { type: 'event'; jobId: number; level: 'info' | 'warn' | 'error'; text: string }
   | { type: 'result'; jobId: number; ok: boolean; cancelled?: boolean; output?: unknown; error?: string }
@@ -32,3 +33,6 @@ export const CLOSE = { badToken: 4401, badHello: 4400, replaced: 4409, revoked: 
 export const PAIRING_PREFIX = 'rpm1.'
 export const encodePairingCode = (hostUrl: string, token: string) =>
   PAIRING_PREFIX + Buffer.from(JSON.stringify({ u: hostUrl, t: token }), 'utf8').toString('base64url')
+
+/** Ce a quoi un Worker a acces (outils detectes sur sa machine). Seule la presence et la version sont envoyees. */
+export interface Capability { id: string; label: string; version: string | null }

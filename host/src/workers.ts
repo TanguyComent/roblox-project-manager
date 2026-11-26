@@ -1,13 +1,14 @@
 // Workers (machines qui executent les taches), pools et taches. Tout est rattache a un utilisateur : jamais de partage entre comptes.
 import { randomToken, sha256 } from './crypto.ts'
 import type { Db } from './db.ts'
+import type { Capability } from './worker-protocol.ts'
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export interface Pool { id: number; user_id: number; name: string; created_at: number; worker_count: number }
 export interface Worker {
   id: number; user_id: number; pool_id: number | null; pool_name: string | null; name: string
-  last_seen_at: number | null; info: Record<string, unknown>; created_at: number
+  last_seen_at: number | null; info: Record<string, unknown>; capabilities: Capability[]; created_at: number
 }
 export interface Job {
   id: number; user_id: number; kind: string; payload: unknown
@@ -43,12 +44,12 @@ export const deletePool = (db: Db, userId: number, id: number) =>
   Number(db.prepare('DELETE FROM worker_pools WHERE id = ? AND user_id = ?').run(id, userId).changes) > 0
 
 // --- workers -----------------------------------------------------------------------------------------------------------------
-type WorkerRow = Omit<Worker, 'info'> & { info_json: string }
+type WorkerRow = Omit<Worker, 'info' | 'capabilities'> & { info_json: string }
 const toWorker = (r: WorkerRow): Worker => {
   const { info_json, ...rest } = r
   let info: Record<string, unknown> = {}
   try { info = JSON.parse(info_json) as Record<string, unknown> } catch { /* illisible : aucune information */ }
-  return { ...rest, info }
+  return { ...rest, info, capabilities: sanitizeCapabilities(info.capabilities) }
 }
 const WORKER_SELECT = `SELECT w.id, w.user_id, w.pool_id, p.name AS pool_name, w.name, w.last_seen_at, w.info_json, w.created_at
   FROM workers w LEFT JOIN worker_pools p ON p.id = w.pool_id`
@@ -96,8 +97,34 @@ export function findWorkerByToken(db: Db, token: string): { id: number; user_id:
     { id: number; user_id: number; name: string; pool_id: number | null } | undefined
 }
 
+// Ce qu'un Worker declare n'est jamais pris tel quel : forme, longueurs et nombre sont verifies avant stockage / affichage.
+export function sanitizeCapabilities(input: unknown): Capability[] {
+  if (!Array.isArray(input)) return []
+  const out: Capability[] = []
+  for (const c of input.slice(0, 30)) {
+    if (!c || typeof c !== 'object') continue
+    const { id, label, version } = c as Record<string, unknown>
+    if (typeof id !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(id) || out.some((o) => o.id === id)) continue
+    out.push({
+      id,
+      label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 40) : id,
+      version: typeof version === 'string' && /^[\w.+-]{1,40}$/.test(version) ? version : null,
+    })
+  }
+  return out
+}
+
+export function setWorkerCapabilities(db: Db, id: number, caps: unknown) {
+  const row = db.prepare('SELECT info_json FROM workers WHERE id = ?').get(id) as { info_json: string } | undefined
+  if (!row) return
+  let info: Record<string, unknown> = {}
+  try { info = JSON.parse(row.info_json) as Record<string, unknown> } catch { /* illisible */ }
+  info.capabilities = sanitizeCapabilities(caps)
+  db.prepare('UPDATE workers SET info_json = ? WHERE id = ?').run(JSON.stringify(info).slice(0, 8000), id)
+}
+
 export function touchWorker(db: Db, id: number, info?: Record<string, unknown>) {
-  if (info) db.prepare('UPDATE workers SET last_seen_at = ?, info_json = ? WHERE id = ?').run(now(), JSON.stringify(info).slice(0, 4000), id)
+  if (info) db.prepare('UPDATE workers SET last_seen_at = ?, info_json = ? WHERE id = ?').run(now(), JSON.stringify(info).slice(0, 8000), id)
   else db.prepare('UPDATE workers SET last_seen_at = ? WHERE id = ?').run(now(), id)
 }
 

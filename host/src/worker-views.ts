@@ -33,6 +33,10 @@ const infoLine = (w: Worker) => {
   return [i.hostname, [i.platform, i.arch].filter(Boolean).join(' '), i.version ? `v${i.version}` : ''].filter(Boolean).map((x) => esc(x)).join(' · ')
 }
 
+const caps = (w: Worker) => w.capabilities.length
+  ? `<span class="caps">${w.capabilities.map((c) => `<span class="pill ok">${esc(c.label)}${c.version ? ` ${esc(c.version)}` : ''}</span>`).join(' ')}</span>`
+  : '<span class="muted small">Aucun outil detecte (derniere connexion).</span>'
+
 export interface RevealedToken { name: string; token: string; hostUrl: string }
 
 function reveal(r: RevealedToken) {
@@ -69,6 +73,7 @@ export function workersPage(o: Viewer & {
         <strong>${esc(w.name)}</strong>
         <span class="muted">${STATUS[w.status]} ${w.status === 'offline' ? `· vu ${esc(ago(w.last_seen_at))}` : ''}${w.pool_name ? ` · pool « ${esc(w.pool_name)} »` : ''}</span>
         ${infoLine(w) ? `<span class="muted small">${infoLine(w)}</span>` : ''}
+        ${caps(w)}
         <details class="change"><summary>Reglages</summary>
           <form method="post" action="/workers/${w.id}/pool" class="pool-form">${csrfField(o.csrf)}
             <label>Pool <select name="poolId">${poolOptions(w.pool_id)}</select></label>

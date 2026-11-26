@@ -18,6 +18,12 @@ Node 24+ suffit (aucune installation de dependances necessaire pour l'executer).
 
 La page locale montre l'etat (connecte, Host injoignable, refuse…), le journal, permet d'arreter / demarrer, de rejumeler ou de supprimer le jumelage.
 
+## Outils detectes
+
+Au demarrage (puis toutes les 10 min, ou via *Re-detecter*), le Worker cherche ce a quoi la machine a acces : **Claude Code, Codex (OpenAI), Gemini CLI, Blender, Git, Roblox Studio**
+(sur le PATH, puis aux emplacements d'installation habituels). Il envoie au Host **uniquement** le nom et la version (jamais de chemin ni de compte) ; la page *Workers* du site les affiche
+sur chaque machine. Pour ajouter un outil : une ligne dans `TOOLS` (`src/capabilities.ts`). La detection verifie la **presence** de l'outil, pas qu'il est connecte a un compte.
+
 ## Configuration : `worker/.env`
 
 Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :

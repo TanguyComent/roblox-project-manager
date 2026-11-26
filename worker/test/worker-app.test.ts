@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import { createAgent } from '../src/agent.ts'
 import { createAutostart, type Autostart } from '../src/autostart.ts'
 import { parseEnv, readConfig, writeConfig } from '../src/config.ts'
-import { PAIRING_PREFIX, parsePairingCode, readPairingInput } from '../src/protocol.ts'
+import { PAIRING_PREFIX, parsePairingCode, readPairingInput, type Capability } from '../src/protocol.ts'
 import { createUi } from '../src/ui.ts'
 import type { RunningWorker, WorkerOptions } from '../src/worker.ts'
 
@@ -46,11 +46,11 @@ test('code de jumelage : valide, et refus des entrees douteuses', () => {
 
 // Faux « startWorker » : enregistre ce qu'on lui demande et laisse le test piloter les etats.
 function fakeLauncher() {
-  const started: { opts: WorkerOptions; stopped: boolean }[] = []
+  const started: { opts: WorkerOptions; stopped: boolean; caps: Capability[][] }[] = []
   const launch = (opts: WorkerOptions): RunningWorker => {
-    const rec = { opts, stopped: false }
+    const rec = { opts, stopped: false, caps: [] as Capability[][] }
     started.push(rec)
-    return { state: 'connecting', async stop() { rec.stopped = true } }
+    return { state: 'connecting', setCapabilities: (c) => { rec.caps.push(c) }, async stop() { rec.stopped = true } }
   }
   return { started, launch }
 }

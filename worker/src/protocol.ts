@@ -4,7 +4,8 @@ export const PROTOCOL_VERSION = 1
 
 // Worker -> Host
 export type WorkerMessage =
-  | { type: 'hello'; token: string; protocol: number; version: string; info: Record<string, unknown> }
+  | { type: 'hello'; token: string; protocol: number; version: string; info: Record<string, unknown>; capabilities?: Capability[] }
+  | { type: 'capabilities'; capabilities: Capability[] }
   | { type: 'heartbeat'; busyJobId: number | null }
   | { type: 'event'; jobId: number; level: 'info' | 'warn' | 'error'; text: string }
   | { type: 'result'; jobId: number; ok: boolean; cancelled?: boolean; output?: unknown; error?: string }
@@ -53,3 +54,6 @@ export function parsePairingCode(input: string): { hostUrl: string; token: strin
   const r = readPairingInput(input)
   return r.ok ? { hostUrl: r.hostUrl, token: r.token } : null
 }
+
+/** Ce a quoi un Worker a acces (voir host/src/worker-protocol.ts). */
+export interface Capability { id: string; label: string; version: string | null }

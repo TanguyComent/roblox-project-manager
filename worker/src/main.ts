@@ -45,6 +45,8 @@ server.on('error', (e: NodeJS.ErrnoException) => {
 server.listen(port, '127.0.0.1', () => {
   console.log(`Interface du Worker : ${address}`)
   agent.start()
+  void agent.rescan()
+  setInterval(() => void agent.rescan(), 10 * 60_000).unref() // un outil installe plus tard apparait sans relancer
   if (!noOpen) openBrowser(address)
 })
 

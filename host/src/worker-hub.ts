@@ -6,7 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { Db } from './db.ts'
 import { CLOSE, JOB_KINDS, PROTOCOL_VERSION, WORKER_WS_PATH, type HostMessage, type WorkerMessage } from './worker-protocol.ts'
 import {
-  addJobEvent, failOrphanedJobs, finishJob, findWorkerByToken, getJob, getWorker, insertJob, markJobRunning, queuedJobs, runningJobOf, touchWorker,
+  addJobEvent, failOrphanedJobs, finishJob, findWorkerByToken, getJob, getWorker, insertJob, markJobRunning, queuedJobs, runningJobOf, sanitizeCapabilities, setWorkerCapabilities, touchWorker,
   type Job,
 } from './workers.ts'
 
@@ -77,7 +77,7 @@ export class WorkerHub {
     if (previous) { this.conns.delete(w.id); previous.ws.close(CLOSE.replaced, 'remplace par une nouvelle connexion'); this.interrupt(previous, 'Connexion remplacee') }
     const conn: Conn = { ws, workerId: w.id, userId: w.user_id, poolId: w.pool_id, name: w.name, busyJobId: null, alive: true }
     this.conns.set(w.id, conn)
-    const info = { ...(typeof msg.info === 'object' && msg.info ? msg.info : {}), version: String(msg.version ?? '').slice(0, 40), connectedAt: Date.now() }
+    const info = { ...(typeof msg.info === 'object' && msg.info ? msg.info : {}), version: String(msg.version ?? '').slice(0, 40), connectedAt: Date.now(), capabilities: sanitizeCapabilities(msg.capabilities) }
     touchWorker(this.db, w.id, info)
     this.send(ws, { type: 'welcome', workerId: w.id, name: w.name, heartbeatMs: HEARTBEAT_MS })
     this.dispatch(w.user_id)
@@ -88,6 +88,7 @@ export class WorkerHub {
   private handle(conn: Conn, msg: WorkerMessage) {
     touchWorker(this.db, conn.workerId)
     if (msg.type === 'heartbeat') { conn.alive = true; return }
+    if (msg.type === 'capabilities') { setWorkerCapabilities(this.db, conn.workerId, msg.capabilities); return }
     if (msg.type === 'event') {
       if (this.owns(conn, msg.jobId)) addJobEvent(this.db, msg.jobId, msg.level, msg.text)
       return

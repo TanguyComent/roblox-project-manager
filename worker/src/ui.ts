@@ -80,6 +80,11 @@ ${notice ? `<p class="alert ${notice.ok ? 'ok' : ''}" role="alert">${esc(notice.
 ${!configured ? `<section class="card"><h2>Jumeler ce Worker</h2>
   <ol><li>Sur le site, page <strong>Workers</strong> → <em>Creer le Worker</em>.</li><li>Copie le <strong>code de jumelage</strong> affiche et colle-le ici.</li></ol>${pairForm()}</section>` : ''}
 <section class="card">
+  <div class="row"><h2 style="margin:0">Outils detectes</h2>${button('/rescan', s.scanning ? 'Detection…' : 'Re-detecter')}</div>
+  <p class="muted small">Ce a quoi cette machine a acces ; le Host en est informe.</p>
+  <p>${s.capabilities.length ? s.capabilities.map((c) => `<span class="pill ok">${esc(c.label)}${c.version ? ` ${esc(c.version)}` : ''}</span>`).join(' ') : '<span class="muted">Aucun outil reconnu (Claude Code, Codex, Gemini, Blender, Git, Roblox Studio).</span>'}</p>
+</section>
+<section class="card">
   <h2>Demarrage automatique</h2>
   ${o.autostart.supported
     ? `<div class="row"><p class="muted" style="margin:0">${autostartOn ? "Le Worker se lance tout seul, en arriere-plan, a l'ouverture de ta session." : 'Le Worker ne se lance pas tout seul : il faut le demarrer a la main.'}</p>
@@ -147,6 +152,7 @@ ${configured ? `<section class="card"><details><summary>Changer de Host / rejume
         }
         case '/start': o.agent.start(); return redirect(res)
         case '/stop': await o.agent.stop(); return redirect(res, 'Worker arrete.')
+        case '/rescan': await o.agent.rescan(); return redirect(res, 'Outils detectes a nouveau.')
         case '/forget': await o.agent.forget(); return redirect(res, 'Jumelage supprime.')
         case '/autostart': {
           try {

@@ -189,3 +189,4 @@ pre.code { margin: 8px 0 14px; padding: 12px 14px; background: #0a0d18; border: 
 .worker .row-main { display: grid; gap: 3px; }
 .acct-actions { display: flex; gap: 8px; align-items: center; }
 .steps { margin: 8px 0; padding-left: 20px; display: grid; gap: 6px; }
+.caps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }

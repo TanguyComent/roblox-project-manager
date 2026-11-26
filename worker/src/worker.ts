@@ -1,6 +1,6 @@
 // Coeur du Worker : une connexion SORTANTE vers le Host (rien a ouvrir sur cette machine), reconnectee automatiquement.
 import { defaultHandlers, JobCancelled, type JobHandler } from './jobs.ts'
-import { CLOSE, PROTOCOL_VERSION, WORKER_WS_PATH, type HostMessage, type WorkerMessage } from './protocol.ts'
+import { CLOSE, PROTOCOL_VERSION, WORKER_WS_PATH, type Capability, type HostMessage, type WorkerMessage } from './protocol.ts'
 
 export type WorkerState = 'connecting' | 'connected' | 'waiting' | 'stopped' | 'rejected'
 
@@ -12,6 +12,8 @@ export interface WorkerOptions {
   /** Informations affichees sur le site (nom de la machine, systeme, capacites...). */
   info?: Record<string, unknown>
   handlers?: Record<string, JobHandler>
+  /** Outils detectes sur la machine, envoyes au Host a chaque connexion (la valeur la plus recente est lue au moment du hello). */
+  getCapabilities?: () => Capability[]
   log?: (message: string) => void
   onState?: (state: WorkerState, detail?: string) => void
   /** Delais de reconnexion (ms) : exponentiels entre `minMs` et `maxMs`. */
@@ -19,6 +21,8 @@ export interface WorkerOptions {
 }
 
 export interface RunningWorker {
+  /** Prevenir le Host d'un changement des outils detectes (sans reconnexion). */
+  setCapabilities(caps: Capability[]): void
   stop(): Promise<void>
   readonly state: WorkerState
 }
@@ -84,7 +88,7 @@ export function startWorker(opts: WorkerOptions): RunningWorker {
     ws = socket
 
     socket.addEventListener('open', () => {
-      send({ type: 'hello', token: opts.token, protocol: PROTOCOL_VERSION, version: opts.version ?? '0.1.0', info: opts.info ?? {} })
+      send({ type: 'hello', token: opts.token, protocol: PROTOCOL_VERSION, version: opts.version ?? '0.1.0', info: opts.info ?? {}, capabilities: opts.getCapabilities?.() ?? [] })
     })
 
     socket.addEventListener('message', (ev) => {
@@ -132,6 +136,7 @@ export function startWorker(opts: WorkerOptions): RunningWorker {
 
   return {
     get state() { return state },
+    setCapabilities(caps) { send({ type: 'capabilities', capabilities: caps }) },
     async stop() {
       if (stopped && state !== 'connected') { return }
       stopped = true

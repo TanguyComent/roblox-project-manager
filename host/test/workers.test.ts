@@ -364,3 +364,38 @@ test('la page du code de jumelage ne se recharge jamais toute seule', async () =
     assert.match((await t.c.call('GET', '/workers')).text, /http-equiv="refresh"/, 'la page normale se rafraichit toujours pendant une tache')
   } finally { await t.close() }
 })
+
+test('outils detectes : envoyes au hello, mis a jour en direct, affiches, et nettoyes', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    const caps = [{ id: 'git', label: 'Git', version: '2.43.0' }, { id: 'claude', label: 'Claude Code', version: '2.0.5' }]
+    const run = startWorker({ hostUrl: t.url, token: w.token, getCapabilities: () => caps, backoff: { minMs: 20, maxMs: 60 } })
+    await t.online(w.id)
+    const stored = () => (JSON.parse((t.c.db.prepare('SELECT info_json FROM workers WHERE id = ?').get(w.id) as { info_json: string }).info_json) as { capabilities: { id: string; label: string; version: string | null }[] }).capabilities
+    assert.deepEqual(stored().map((c) => c.id), ['git', 'claude'])
+    const page = (await t.c.call('GET', '/workers')).text
+    assert.match(page, /Git 2\.43\.0/)
+    assert.match(page, /Claude Code 2\.0\.5/)
+
+    // mise a jour sans reconnexion
+    run.setCapabilities([...caps, { id: 'blender', label: 'Blender', version: '4.2.0' }])
+    await waitFor(() => stored().length === 3, 'mise a jour des outils')
+    assert.match((await t.c.call('GET', '/workers')).text, /Blender 4\.2\.0/)
+
+    // un Worker ne peut pas injecter n'importe quoi : forme, doublons, longueurs et balises sont filtres
+    run.setCapabilities([
+      { id: 'git', label: 'Git', version: '2.0' }, { id: 'git', label: 'Doublon', version: null },
+      { id: '../x', label: 'mauvais id', version: null }, { id: 'xss', label: '<script>alert(1)</script>', version: '<b>' },
+      { id: 'long', label: 'L'.repeat(500), version: 'v'.repeat(500) },
+    ] as never)
+    await waitFor(() => stored().length === 3 && stored()[1]?.id === 'xss', 'filtrage')
+    const clean = (await t.c.call('GET', '/workers')).text
+    assert.ok(!clean.includes('<script>alert'), 'balises echappees')
+    assert.deepEqual(stored().map((c) => c.id), ['git', 'xss', 'long'])
+    const long = stored()[2]
+    assert.equal(long.label.length, 40)
+    assert.equal(long.version, null)
+    await run.stop()
+  } finally { await t.close() }
+})
