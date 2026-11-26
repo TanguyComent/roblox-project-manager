@@ -19,7 +19,7 @@ h1 { margin: 0; font-size: 22px; } h2 { margin: 0 0 8px; font-size: 16px; }
 .pill.ok { color: var(--ok); background: rgba(79,209,160,.13); } .pill.warn { color: var(--warn); background: rgba(242,184,75,.13); } .pill.bad { color: var(--err); background: rgba(255,107,125,.13); }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 form { margin: 0; } form.inline { display: inline; }
-textarea { width: 100%; padding: 10px 12px; background: #0b0e18; color: var(--text); border: 1px solid var(--line); border-radius: 10px; font: 13px ui-monospace, Menlo, Consolas, monospace; }
+textarea, input[type=text] { width: 100%; padding: 10px 12px; background: #0b0e18; color: var(--text); border: 1px solid var(--line); border-radius: 10px; font: 13px ui-monospace, Menlo, Consolas, monospace; }
 button { padding: 8px 16px; border-radius: 10px; border: 1px solid var(--line); background: #1a2138; color: var(--text); font: inherit; cursor: pointer; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #0b0e18; font-weight: 650; }
 button.danger { color: var(--err); background: transparent; }
@@ -79,6 +79,14 @@ ${notice ? `<p class="alert ${notice.ok ? 'ok' : ''}" role="alert">${esc(notice.
 </section>
 ${!configured ? `<section class="card"><h2>Jumeler ce Worker</h2>
   <ol><li>Sur le site, page <strong>Workers</strong> → <em>Creer le Worker</em>.</li><li>Copie le <strong>code de jumelage</strong> affiche et colle-le ici.</li></ol>${pairForm()}</section>` : ''}
+<section class="card">
+  <h2>Espace de travail</h2>
+  <p class="muted small">Dossier ou le Worker clone et manipule les depots git (un depot = un sous-dossier).</p>
+  <form method="post" action="/workspace">${hidden}
+    <input type="text" name="dir" value="${esc(s.workspace ?? '')}" placeholder="C:/Users/toi/RPM-Workspace" autocomplete="off" spellcheck="false">
+    <div class="actions"><button class="primary" type="submit">Enregistrer</button></div>
+  </form>
+</section>
 <section class="card">
   <div class="row"><h2 style="margin:0">Outils detectes</h2>${button('/rescan', s.scanning ? 'Detection…' : 'Re-detecter')}</div>
   <p class="muted small">Ce a quoi cette machine a acces ; le Host en est informe.</p>
@@ -152,6 +160,10 @@ ${configured ? `<section class="card"><details><summary>Changer de Host / rejume
         }
         case '/start': o.agent.start(); return redirect(res)
         case '/stop': await o.agent.stop(); return redirect(res, 'Worker arrete.')
+        case '/workspace': {
+          const r = o.agent.setWorkspace(form.get('dir') ?? '')
+          return r.ok ? redirect(res, 'Espace de travail enregistre.') : redirect(res, r.error, false)
+        }
         case '/rescan': await o.agent.rescan(); return redirect(res, 'Outils detectes a nouveau.')
         case '/forget': await o.agent.forget(); return redirect(res, 'Jumelage supprime.')
         case '/autostart': {

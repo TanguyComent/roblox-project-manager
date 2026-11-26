@@ -10,6 +10,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAgent } from '../../worker/src/agent.ts'
+import { gitHandlers } from '../../worker/src/git.ts'
+import { execFileSync } from 'node:child_process'
 import { client, csrfOf, registerAndEnable } from './helpers.ts'
 
 type Client = ReturnType<typeof client>
@@ -396,6 +398,35 @@ test('outils detectes : envoyes au hello, mis a jour en direct, affiches, et net
     const long = stored()[2]
     assert.equal(long.label.length, 40)
     assert.equal(long.version, null)
+    await run.stop()
+  } finally { await t.close() }
+})
+
+test('le Host envoie des taches git, le Worker les execute dans son espace de travail et le Host garde les resultats', async () => {
+  const t = await setup()
+  try {
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+    const git = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, env: gitEnv, encoding: 'utf8' })
+    const seed = mkdtempSync(join(tmpdir(), 'rpm-seed-'))
+    git(seed, 'init', '-q', '-b', 'main'); git(seed, 'commit', '-q', '--allow-empty', '-m', 'init')
+    const workspace = mkdtempSync(join(tmpdir(), 'rpm-ws-'))
+    const w = t.addWorker('PC')
+    const run = startWorker({ hostUrl: t.url, token: w.token, handlers: gitHandlers({ workspace: () => workspace, allowUrl: () => true }) })
+    await t.online(w.id)
+
+    const clone = t.c.hub.enqueue(t.userId, 'git.clone', { url: seed, dir: 'jeu' }, { workerId: w.id })
+    const branch = t.c.hub.enqueue(t.userId, 'git.branch', { dir: 'jeu', name: 'feature/x' }, { workerId: w.id })
+    const status = t.c.hub.enqueue(t.userId, 'git.status', { dir: 'jeu' }, { workerId: w.id })
+    const bad = t.c.hub.enqueue(t.userId, 'git.checkout', { dir: '../evil', branch: 'main' }, { workerId: w.id })
+    await waitFor(() => [clone, branch, status, bad].every((j) => !['queued', 'running'].includes(t.status(j))), 'taches git terminees')
+
+    const job = (id: number) => getJob(t.c.db, t.userId, id)!
+    assert.equal(job(clone).status, 'succeeded')
+    assert.equal((job(branch).result as { branch: string }).branch, 'feature/x')
+    assert.equal((job(status).result as { dirtyFiles: number }).dirtyFiles, 0)
+    assert.equal(job(bad).status, 'failed')
+    assert.match(job(bad).error!, /Nom de dossier invalide/)
+    assert.match((await t.c.call('GET', `/jobs/${clone}`)).text, /git clone/, 'sortie de git visible dans les evenements')
     await run.stop()
   } finally { await t.close() }
 })

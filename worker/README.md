@@ -24,6 +24,14 @@ Au demarrage (puis toutes les 10 min, ou via *Re-detecter*), le Worker cherche c
 (sur le PATH, puis aux emplacements d'installation habituels). Il envoie au Host **uniquement** le nom et la version (jamais de chemin ni de compte) ; la page *Workers* du site les affiche
 sur chaque machine. Pour ajouter un outil : une ligne dans `TOOLS` (`src/capabilities.ts`). La detection verifie la **presence** de l'outil, pas qu'il est connecte a un compte.
 
+## Espace de travail et git
+
+`RPM_WORKSPACE_DIR` (dans `.env`, ou champ *Espace de travail* de la page locale) est le dossier ou les depots sont clones : **un depot = un sous-dossier direct**, designe par son nom.
+Taches git disponibles : `git.clone`, `git.branch` (cree et s'y place), `git.checkout`, `git.pull` (fast-forward uniquement), `git.push` (jamais force), `git.status`.
+Securite : aucun shell, chaque argument est valide (noms de dossier et de branche, URL https/ssh sans identifiants), aucun depot hors de l'espace de travail (liens symboliques compris).
+Authentification : par defaut celle de la machine (gestionnaire d'identifiants git, cles ssh) ; le Host peut aussi fournir un `token` GitHub dans la tache : transmis par variables
+d'environnement (jamais en argument ni dans `.git/config`), limite a github.com, et masque dans les journaux.
+
 ## Configuration : `worker/.env`
 
 Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :
@@ -32,6 +40,7 @@ Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :
 RPM_HOST_URL=http://localhost:3000
 RPM_WORKER_TOKEN=rpmw_...
 RPM_UI_PORT=4180        # facultatif
+RPM_WORKSPACE_DIR=C:/Users/toi/RPM-Workspace   # depots git (voir plus haut)
 ```
 
 Le fichier contient le jeton : il est ignore par git, ne le partage pas. Le Worker se reconnecte seul (delai exponentiel) si la connexion tombe, et s'arrete si

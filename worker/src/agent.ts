@@ -1,5 +1,6 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
-import { DEFAULT_ENV_PATH, readConfig, writeConfig } from './config.ts'
+import { DEFAULT_ENV_PATH, readConfig, readWorkspace, workspaceProblem, writeConfig, writeWorkspace } from './config.ts'
+import { gitHandlers } from './git.ts'
 import { detectCapabilities } from './capabilities.ts'
 import { readPairingInput, type Capability } from './protocol.ts'
 import { startWorker, type RunningWorker, type WorkerOptions, type WorkerState } from './worker.ts'
@@ -15,6 +16,7 @@ export interface AgentSnapshot {
   startedAt: number
   capabilities: Capability[]
   scanning: boolean
+  workspace: string | null
 }
 
 export interface Agent {
@@ -26,6 +28,7 @@ export interface Agent {
   log(message: string): void
   /** Relance la detection des outils et previent le Host. */
   rescan(): Promise<void>
+  setWorkspace(dir: string): { ok: true } | { ok: false; error: string }
 }
 
 const MAX_LOGS = 200
@@ -60,7 +63,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     workerName = null
     const gen = ++generation
     current = launch({
-      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps,
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: gitHandlers({ workspace: () => readWorkspace(envPath) }),
       onState: (s, d) => {
         if (gen !== generation) return // evenement d'une ancienne connexion
         state = s
@@ -86,9 +89,17 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     // Un .env cree ou modifie a la main apres le lancement est pris en compte des que la page est rechargee.
     snapshot: () => {
       if (state === 'unconfigured' && !current && readConfig(envPath)) start()
-      return { state, hostUrl, workerName, detail, logs: [...logs], startedAt, capabilities: caps, scanning }
+      return { state, hostUrl, workerName, detail, logs: [...logs], startedAt, capabilities: caps, scanning, workspace: readWorkspace(envPath) }
     },
     start, stop, log,
+    setWorkspace(dir) {
+      const value = dir.trim()
+      const problem = workspaceProblem(value)
+      if (problem) return { ok: false, error: problem }
+      try { writeWorkspace(value || null, envPath) } catch (e) { return { ok: false, error: `Impossible de creer ce dossier : ${e instanceof Error ? e.message : String(e)}` } }
+      log(value ? `espace de travail : ${value}` : 'espace de travail retire')
+      return { ok: true }
+    },
     async rescan() {
       if (scanning) return
       scanning = true
