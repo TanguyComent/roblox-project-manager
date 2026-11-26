@@ -28,6 +28,7 @@ button.danger { color: var(--err); background: transparent; }
 .alert.ok { background: rgba(79,209,160,.1); color: var(--ok); }
 pre.log { margin: 0; max-height: 280px; overflow: auto; padding: 12px; background: #0b0e18; border: 1px solid var(--line); border-radius: 10px; font: 12.5px/1.55 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 ol { margin: 8px 0 0; padding-left: 20px; } code { font: 13px ui-monospace, Menlo, Consolas, monospace; background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 6px; }
+ul.repos { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
 details summary { cursor: pointer; color: var(--accent); }
 `
 
@@ -38,6 +39,11 @@ const STATE: Record<AgentState, { pill: string; label: string; help: string }> =
   connected: { pill: 'ok', label: 'Connecte', help: 'Pret : le Host peut envoyer des taches a cette machine.' },
   waiting: { pill: 'warn', label: 'Host injoignable', help: 'Nouvelle tentative automatique en cours.' },
   rejected: { pill: 'bad', label: 'Refuse par le Host', help: "Le jeton n'est plus valide (Worker supprime, jeton regenere ou autre machine connectee). Jumelle-le de nouveau avec un nouveau code." },
+}
+
+const ago = (ms: number) => {
+  const m = Math.max(0, Math.round((Date.now() - ms) / 60000))
+  return m < 60 ? `il y a ${m} min` : m < 2880 ? `il y a ${Math.round(m / 60)} h` : `il y a ${Math.round(m / 1440)} j`
 }
 
 export interface UiOptions { agent: Agent; autostart: Autostart; port: number; quit: () => void }
@@ -86,6 +92,11 @@ ${!configured ? `<section class="card"><h2>Jumeler ce Worker</h2>
     <input type="text" name="dir" value="${esc(s.workspace ?? '')}" placeholder="C:/Users/toi/RPM-Workspace" autocomplete="off" spellcheck="false">
     <div class="actions"><button class="primary" type="submit">Enregistrer</button></div>
   </form>
+  ${s.repos.length ? `<h2 style="margin:18px 0 6px">Depots sur cette machine</h2>
+  <ul class="repos">${s.repos.map((r) => `<li><strong>${esc(r.project)}</strong> <span class="muted small">${esc(r.url)}</span>
+    <div class="small muted">${r.branches.length ? r.branches.map((b) => `${esc(b.name)} (${esc(ago(b.lastUsed))})`).join(' · ') : 'aucune branche active'}</div></li>`).join('')}</ul>
+  <p class="muted small">Un dossier inutilise depuis plus de 3 jours est supprime, sauf s'il a des modifications ou des commits non pousses.</p>
+  ${button('/cleanup', 'Nettoyer maintenant')}` : ''}
 </section>
 <section class="card">
   <div class="row"><h2 style="margin:0">Outils detectes</h2>${button('/rescan', s.scanning ? 'Detection…' : 'Re-detecter')}</div>
@@ -164,6 +175,7 @@ ${configured ? `<section class="card"><details><summary>Changer de Host / rejume
           const r = o.agent.setWorkspace(form.get('dir') ?? '')
           return r.ok ? redirect(res, 'Espace de travail enregistre.') : redirect(res, r.error, false)
         }
+        case '/cleanup': { const r = await o.agent.cleanup(); return redirect(res, r ? `Nettoyage : ${r.removed.length} supprime(s), ${r.kept.length} conserve(s).` : 'Nettoyage impossible.', !!r) }
         case '/rescan': await o.agent.rescan(); return redirect(res, 'Outils detectes a nouveau.')
         case '/forget': await o.agent.forget(); return redirect(res, 'Jumelage supprime.')
         case '/autostart': {

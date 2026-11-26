@@ -46,6 +46,8 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`Interface du Worker : ${address}`)
   agent.start()
   void agent.rescan()
+  void agent.cleanup()
+  setInterval(() => void agent.cleanup(), 6 * 3600_000).unref() // dossiers de travail inutilises depuis plus de 3 jours
   setInterval(() => void agent.rescan(), 10 * 60_000).unref() // un outil installe plus tard apparait sans relancer
   if (!noOpen) openBrowser(address)
 })

@@ -1,6 +1,6 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
 import { DEFAULT_ENV_PATH, readConfig, readWorkspace, workspaceProblem, writeConfig, writeWorkspace } from './config.ts'
-import { gitHandlers } from './git.ts'
+import { createGit, type RegistryView, type SweepResult } from './git.ts'
 import { detectCapabilities } from './capabilities.ts'
 import { readPairingInput, type Capability } from './protocol.ts'
 import { startWorker, type RunningWorker, type WorkerOptions, type WorkerState } from './worker.ts'
@@ -17,6 +17,7 @@ export interface AgentSnapshot {
   capabilities: Capability[]
   scanning: boolean
   workspace: string | null
+  repos: RegistryView[]
 }
 
 export interface Agent {
@@ -28,12 +29,14 @@ export interface Agent {
   log(message: string): void
   /** Relance la detection des outils et previent le Host. */
   rescan(): Promise<void>
+  /** Nettoie les dossiers de travail inutilises (voir git.ts) et journalise le resultat. */
+  cleanup(): Promise<SweepResult | null>
   setWorkspace(dir: string): { ok: true } | { ok: false; error: string }
 }
 
 const MAX_LOGS = 200
 
-export function createAgent(o: { envPath?: string; version: string; info: Record<string, unknown>; launch?: (opts: WorkerOptions) => RunningWorker; backoff?: WorkerOptions['backoff']; echo?: (line: string) => void; detect?: () => Promise<Capability[]> }): Agent {
+export function createAgent(o: { envPath?: string; version: string; info: Record<string, unknown>; launch?: (opts: WorkerOptions) => RunningWorker; backoff?: WorkerOptions['backoff']; echo?: (line: string) => void; detect?: () => Promise<Capability[]>; git?: Partial<Parameters<typeof createGit>[0]> }): Agent {
   const envPath = o.envPath ?? DEFAULT_ENV_PATH
   const launch = o.launch ?? startWorker
   const logs: string[] = []
@@ -43,6 +46,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
   let workerName: string | null = null
   let hostUrl: string | null = null
   let current: RunningWorker | null = null
+  const gitInstance = createGit({ workspace: () => readWorkspace(envPath), ...o.git })
   let caps: Capability[] = []
   let scanning = false
   const detect = o.detect ?? detectCapabilities
@@ -63,7 +67,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     workerName = null
     const gen = ++generation
     current = launch({
-      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: gitHandlers({ workspace: () => readWorkspace(envPath) }),
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: gitInstance.handlers,
       onState: (s, d) => {
         if (gen !== generation) return // evenement d'une ancienne connexion
         state = s
@@ -89,9 +93,17 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     // Un .env cree ou modifie a la main apres le lancement est pris en compte des que la page est rechargee.
     snapshot: () => {
       if (state === 'unconfigured' && !current && readConfig(envPath)) start()
-      return { state, hostUrl, workerName, detail, logs: [...logs], startedAt, capabilities: caps, scanning, workspace: readWorkspace(envPath) }
+      return { state, hostUrl, workerName, detail, logs: [...logs], startedAt, capabilities: caps, scanning, workspace: readWorkspace(envPath), repos: gitInstance.registry() }
     },
     start, stop, log,
+    async cleanup() {
+      try {
+        const r = await gitInstance.sweep()
+        if (r.removed.length) log(`nettoyage : supprime ${r.removed.join(', ')}`)
+        for (const k of r.kept) log(`nettoyage : ${k.item} conserve (${k.reason})`)
+        return r
+      } catch (e) { log(`nettoyage impossible : ${e instanceof Error ? e.message : String(e)}`); return null }
+    },
     setWorkspace(dir) {
       const value = dir.trim()
       const problem = workspaceProblem(value)

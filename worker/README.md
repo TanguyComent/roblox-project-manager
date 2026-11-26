@@ -26,9 +26,23 @@ sur chaque machine. Pour ajouter un outil : une ligne dans `TOOLS` (`src/capabil
 
 ## Espace de travail et git
 
-`RPM_WORKSPACE_DIR` (dans `.env`, ou champ *Espace de travail* de la page locale) est le dossier ou les depots sont clones : **un depot = un sous-dossier direct**, designe par son nom.
-Taches git disponibles : `git.clone`, `git.branch` (cree et s'y place), `git.checkout`, `git.pull` (fast-forward uniquement), `git.push` (jamais force), `git.status`.
-Securite : aucun shell, chaque argument est valide (noms de dossier et de branche, URL https/ssh sans identifiants), aucun depot hors de l'espace de travail (liens symboliques compris).
+`RPM_WORKSPACE_DIR` (dans `.env`, ou champ *Espace de travail* de la page locale) est le dossier ou le Worker range ses depots :
+
+```
+<espace>/<projet>/repo                  un seul clone du depot
+<espace>/<projet>/branches/<branche>    un dossier de travail (git worktree) par branche ("/" devient "+")
+<espace>/.rpm/registry.json             registre : ce que le Worker possede, et la derniere utilisation de chaque dossier
+```
+
+Taches git : `git.prepare` (clone le depot si besoin, sinon le met a jour ; cree le dossier de la branche s'il n'existe pas, sinon s'y place ; une branche inconnue est
+creee depuis `base`, par defaut la branche principale), `git.pull` (fast-forward uniquement), `git.push` (jamais force), `git.status`, `git.cleanup`.
+Les taches travaillent **toujours sur une branche dediee** : la branche principale est refusee (prepare comme push). Le merge se fait ailleurs (pull request).
+
+**Nettoyage** : au demarrage puis toutes les 6 h (et via le bouton de la page locale), un dossier de branche inutilise depuis plus de 3 jours est supprime, ainsi que le clone du
+projet quand il n'a plus aucun dossier et reste inutilise. Un dossier n'est supprime que s'il n'a **aucune modification en cours et que son travail est deja pousse** ;
+sinon il est conserve (et signale dans le journal). Il est recree a la demande.
+
+Securite : aucun shell, chaque argument est valide (noms de projet et de branche, URL https/ssh sans identifiants), rien hors de l'espace de travail (liens symboliques compris).
 Authentification : par defaut celle de la machine (gestionnaire d'identifiants git, cles ssh) ; le Host peut aussi fournir un `token` GitHub dans la tache : transmis par variables
 d'environnement (jamais en argument ni dans `.git/config`), limite a github.com, et masque dans les journaux.
 

@@ -6,154 +6,238 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createAgent } from '../src/agent.ts'
 import { readWorkspace } from '../src/config.ts'
-import { gitHandlers } from '../src/git.ts'
+import { createGit, gitHandlers } from '../src/git.ts'
 import type { JobContext } from '../src/jobs.ts'
 
+const DAY = 86_400_000
 const tmp = () => mkdtempSync(join(tmpdir(), 'rpm-git-'))
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env, encoding: 'utf8' }).trim()
 const ctx = (payload: unknown, events: string[] = []): JobContext => ({ jobId: 1, payload, signal: new AbortController().signal, event: (_l, t) => { events.push(t) } })
+const commit = (cwd: string, file: string, msg = 'c') => { writeFileSync(join(cwd, file), msg); git(cwd, 'add', '.'); git(cwd, 'commit', '-q', '-m', msg) }
 
 // Depot « distant » local (un depot nu) avec un premier commit sur main.
 function remote() {
   const seed = tmp()
   git(seed, 'init', '-q', '-b', 'main')
-  writeFileSync(join(seed, 'a.txt'), 'un\n')
-  git(seed, 'add', '.'); git(seed, 'commit', '-q', '-m', 'init')
+  commit(seed, 'a.txt', 'un')
   const bare = join(tmp(), 'remote.git')
   git(seed, 'clone', '-q', '--bare', '.', bare)
   return bare
 }
 
 // allowUrl permissif : les tests clonent depuis un dossier local. Le filtre par defaut est teste a part.
-const setup = (workspace: string | null = tmp()) => ({ ws: workspace, h: gitHandlers({ workspace: () => workspace, allowUrl: () => true }) })
+function setup(workspace: string | null = tmp()) {
+  const clock = { t: 1_000_000_000_000 }
+  const g = createGit({ workspace: () => workspace, allowUrl: () => true, now: () => clock.t })
+  return { ws: workspace, g, h: g.handlers, clock, wt: (project: string, branch: string) => join(workspace!, project, 'branches', branch.replace(/\//g, '+')) }
+}
 const rejects = (p: Promise<unknown>, re: RegExp) => assert.rejects(p, (e: Error) => { assert.match(e.message, re); return true })
+type Prepared = { project: string; path: string; cloned: boolean; created: boolean; newBranch: boolean; branch: string; head: string }
 
-test('cycle complet : clone, branche, commit, push, checkout, pull', async () => {
+test('un depot clone une fois, un dossier de travail par branche, reutilise ensuite', async () => {
   const bare = remote()
-  const { ws, h } = setup()
+  const { ws, h, wt } = setup()
   const events: string[] = []
 
-  const cloned = await h['git.clone'](ctx({ url: bare, dir: 'jeu' }, events)) as { dir: string; branch: string; head: string }
-  assert.equal(cloned.dir, 'jeu'); assert.equal(cloned.branch, 'main'); assert.match(cloned.head, /^[0-9a-f]{7,}$/)
-  assert.ok(existsSync(join(ws!, 'jeu', 'a.txt')))
+  const a = await h['git.prepare'](ctx({ project: 'jeu', url: bare, branch: 'feature/ia' }, events)) as Prepared
+  assert.deepEqual([a.cloned, a.created, a.newBranch], [true, true, true])
+  assert.equal(a.path, 'jeu/branches/feature+ia')
+  assert.equal(a.branch, 'feature/ia')
+  assert.ok(existsSync(join(wt('jeu', 'feature/ia'), 'a.txt')))
+  assert.equal(git(join(ws!, 'jeu', 'repo'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'HEAD', 'clone principal en HEAD detache')
 
-  const b = await h['git.branch'](ctx({ dir: 'jeu', name: 'feature/ia' })) as { branch: string }
-  assert.equal(b.branch, 'feature/ia')
-  writeFileSync(join(ws!, 'jeu', 'b.txt'), 'deux\n')
-  let st = await h['git.status'](ctx({ dir: 'jeu' })) as { dirtyFiles: number; ahead: number | null }
-  assert.equal(st.dirtyFiles, 1)
-  assert.equal(st.ahead, null, 'pas encore de branche distante')
-  git(join(ws!, 'jeu'), 'add', '.'); git(join(ws!, 'jeu'), 'commit', '-q', '-m', 'ajout b')
-
-  const pushed = await h['git.push'](ctx({ dir: 'jeu' })) as { pushed: string }
+  commit(wt('jeu', 'feature/ia'), 'b.txt', 'deux')
+  const pushed = await h['git.push'](ctx({ project: 'jeu', branch: 'feature/ia' })) as { pushed: string }
   assert.equal(pushed.pushed, 'feature/ia')
   assert.match(git(bare, 'branch', '--list'), /feature\/ia/)
-  st = await h['git.status'](ctx({ dir: 'jeu' })) as typeof st
-  assert.equal(st.ahead, 0); assert.equal(st.dirtyFiles, 0)
+  const st = await h['git.status'](ctx({ project: 'jeu', branch: 'feature/ia' })) as { ahead: number; dirtyFiles: number; behind: number }
+  assert.deepEqual([st.ahead, st.behind, st.dirtyFiles], [0, 0, 0])
 
-  const back = await h['git.checkout'](ctx({ dir: 'jeu', branch: 'main' })) as { branch: string }
-  assert.equal(back.branch, 'main')
-  assert.ok(!existsSync(join(ws!, 'jeu', 'b.txt')))
+  // meme branche : on reutilise simplement le dossier (pas de nouveau clone ni de nouveau dossier)
+  const again = await h['git.prepare'](ctx({ project: 'jeu', url: bare, branch: 'feature/ia' })) as Prepared
+  assert.deepEqual([again.cloned, again.created, again.newBranch], [false, false, false])
 
-  // quelqu'un d'autre pousse sur main : le pull (fast-forward) le recupere
-  const other = tmp()
-  git(other, 'clone', '-q', bare, 'x')
-  writeFileSync(join(other, 'x', 'c.txt'), 'trois\n')
-  git(join(other, 'x'), 'add', '.'); git(join(other, 'x'), 'commit', '-q', '-m', 'ajout c'); git(join(other, 'x'), 'push', '-q')
-  await h['git.pull'](ctx({ dir: 'jeu' }))
-  assert.ok(existsSync(join(ws!, 'jeu', 'c.txt')))
+  // autre branche : un 2e dossier, depuis le meme clone
+  const other = await h['git.prepare'](ctx({ project: 'jeu', url: bare, branch: 'correctif' })) as Prepared
+  assert.deepEqual([other.cloned, other.created, other.newBranch], [false, true, true])
+  assert.ok(existsSync(wt('jeu', 'correctif')) && existsSync(wt('jeu', 'feature/ia')))
+  assert.equal(git(join(ws!, 'jeu', 'repo'), 'worktree', 'list').split('\n').length, 3)
+  assert.ok(!existsSync(join(wt('jeu', 'correctif'), 'b.txt')), 'chaque branche a son contenu')
   assert.ok(events.some((e) => e.startsWith('git clone')), 'la sortie de git est remontee en evenements')
 })
 
-test('clone d\'une branche precise, et erreurs claires', async () => {
+test('branche deja sur le depot : suivie ; pull en fast-forward ; branche non poussee : rien a tirer', async () => {
   const bare = remote()
-  git(bare, 'branch', 'dev', 'main')
-  const { ws, h } = setup()
-  assert.equal(((await h['git.clone'](ctx({ url: bare, dir: 'a', branch: 'dev' }))) as { branch: string }).branch, 'dev')
-  await rejects(h['git.clone'](ctx({ url: bare, dir: 'a' })), /existe deja/)
-  await rejects(h['git.clone'](ctx({ url: join(ws!, 'inexistant'), dir: 'b' })), /git clone a echoue/)
-  await rejects(h['git.checkout'](ctx({ dir: 'a', branch: 'nope' })), /git switch a echoue/)
-  await rejects(h['git.branch'](ctx({ dir: 'a', name: 'dev' })), /git switch a echoue/)
-  await rejects(h['git.status'](ctx({ dir: 'absent' })), /introuvable/)
-  mkdirSync(join(ws!, 'pasgit'))
-  await rejects(h['git.status'](ctx({ dir: 'pasgit' })), /pas un depot/)
-})
-
-test('pull : refuse les fusions (fast-forward uniquement) et ne laisse pas de conflit', async () => {
-  const bare = remote()
-  const { ws, h } = setup()
-  await h['git.clone'](ctx({ url: bare, dir: 'r' }))
+  const { g, h, wt } = setup()
   const other = tmp()
   git(other, 'clone', '-q', bare, 'x')
-  writeFileSync(join(other, 'x', 'distant.txt'), '1'); git(join(other, 'x'), 'add', '.'); git(join(other, 'x'), 'commit', '-q', '-m', 'd'); git(join(other, 'x'), 'push', '-q')
-  writeFileSync(join(ws!, 'r', 'local.txt'), '1'); git(join(ws!, 'r'), 'add', '.'); git(join(ws!, 'r'), 'commit', '-q', '-m', 'l')
-  await rejects(h['git.pull'](ctx({ dir: 'r' })), /git pull a echoue/)
-  assert.equal(git(join(ws!, 'r'), 'status', '--porcelain'), '')
+  const x = join(other, 'x')
+  commit(x, 'dist.txt', 'distant'); git(x, 'push', '-q', 'origin', 'HEAD:dev')
+
+  const d = await h['git.prepare'](ctx({ project: 'p', url: bare, branch: 'dev' })) as Prepared
+  assert.deepEqual([d.created, d.newBranch], [true, false])
+  assert.ok(existsSync(join(wt('p', 'dev'), 'dist.txt')))
+  assert.equal(git(wt('p', 'dev'), 'rev-parse', '--abbrev-ref', '@{u}'), 'origin/dev')
+
+  commit(x, 'dist2.txt', 'suite'); git(x, 'push', '-q', 'origin', 'HEAD:dev')
+  await h['git.pull'](ctx({ project: 'p', branch: 'dev' }))
+  assert.ok(existsSync(join(wt('p', 'dev'), 'dist2.txt')), 'le pull recupere les nouveaux commits')
+  await h['git.prepare'](ctx({ project: 'p', url: bare, branch: 'nouvelle', base: 'dev' }))
+  const pulled = await h['git.pull'](ctx({ project: 'p', branch: 'nouvelle' })) as { pulled: boolean }
+  assert.equal(pulled.pulled, false)
+  assert.ok(existsSync(join(wt('p', 'nouvelle'), 'dist.txt')), 'creee depuis la branche de depart demandee')
+  assert.equal(g.registry()[0].branches.length, 2)
+})
+
+test('pull : fast-forward uniquement, aucun conflit laisse en plan', async () => {
+  const bare = remote()
+  const { h, wt } = setup()
+  const other = tmp()
+  git(other, 'clone', '-q', bare, 'x')
+  const x = join(other, 'x')
+  await h['git.prepare'](ctx({ project: 'r', url: bare, branch: 'feat' }))
+  commit(wt('r', 'feat'), 'local.txt', 'l')
+  await h['git.push'](ctx({ project: 'r', branch: 'feat' }))
+  git(x, 'fetch', '-q'); git(x, 'checkout', '-q', 'feat'); commit(x, 'distant.txt', 'd'); git(x, 'push', '-q')
+  commit(wt('r', 'feat'), 'local2.txt', 'l2') // divergence
+  await rejects(h['git.pull'](ctx({ project: 'r', branch: 'feat' })), /git pull a echoue/)
+  assert.equal(git(wt('r', 'feat'), 'status', '--porcelain'), '')
+})
+
+test('la branche principale est protegee ; un projet reste lie a son depot', async () => {
+  const bare = remote()
+  const { h } = setup()
+  await rejects(h['git.prepare'](ctx({ project: 'p', url: bare, branch: 'main' })), /jamais directement/)
+  await rejects(h['git.prepare'](ctx({ project: 'p2', url: bare, branch: 'master' })), /jamais directement/)
+  await h['git.prepare'](ctx({ project: 'q', url: bare, branch: 'feat' }))
+  await rejects(h['git.prepare'](ctx({ project: 'q', url: remote(), branch: 'feat2' })), /autre depot/)
+  await rejects(h['git.prepare'](ctx({ project: 'q', url: bare, branch: 'x', base: 'inexistante' })), /depart introuvable/)
+  await rejects(h['git.push'](ctx({ project: 'q', branch: 'main' })), /introuvable|refuse/)
+  await rejects(h['git.status'](ctx({ project: 'q', branch: 'jamais-prepare' })), /git.prepare/)
+  await rejects(h['git.prepare'](ctx({ project: 'z', url: join(tmp(), 'absent'), branch: 'b' })), /git clone a echoue/)
 })
 
 test('espace de travail : obligatoire, et jamais de sortie du dossier', async () => {
   const bare = remote()
   const none = setup(null)
-  await rejects(none.h['git.clone'](ctx({ url: bare, dir: 'a' })), /Espace de travail non configure/)
+  await rejects(none.h['git.prepare'](ctx({ project: 'a', url: bare, branch: 'b' })), /Espace de travail non configure/)
 
   const { ws, h } = setup()
-  for (const dir of ['../evil', 'a/b', '..', '.', '.hidden', 'a b', 'a\\b', '', 'x'.repeat(65), 'nom.']) {
-    await rejects(h['git.clone'](ctx({ url: bare, dir })), /Nom de dossier invalide|manquant/)
-    await rejects(h['git.status'](ctx({ dir })), /Nom de dossier invalide|manquant/)
+  for (const project of ['../evil', 'a/b', '..', '.', '.hidden', 'a b', 'a\\b', '', 'x'.repeat(65), 'nom.', 'con', 'NUL.txt']) {
+    await rejects(h['git.prepare'](ctx({ project, url: bare, branch: 'b' })), /Nom de projet invalide|manquant/)
+    await rejects(h['git.status'](ctx({ project, branch: 'b' })), /Nom de projet invalide|manquant/)
   }
   assert.ok(!existsSync(join(ws!, '..', 'evil')))
 
+  await h['git.prepare'](ctx({ project: 'ok', url: bare, branch: 'b' }))
   // un lien symbolique qui pointe hors de l'espace de travail est refuse (si le systeme autorise d'en creer)
   const outside = tmp(); git(outside, 'init', '-q')
   try {
-    symlinkSync(outside, join(ws!, 'lien'), 'junction')
-    await rejects(h['git.status'](ctx({ dir: 'lien' })), /sort de l'espace/)
+    symlinkSync(outside, join(ws!, 'ok', 'branches', 'piege'), 'junction')
+    await rejects(h['git.status'](ctx({ project: 'ok', branch: 'piege' })), /sort de l'espace|git.prepare/)
   } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EPERM') throw e }
 })
 
 test('arguments hostiles : URL, branches, jetons', async () => {
   const strict = gitHandlers({ workspace: () => tmp() }) // filtre d'URL par defaut
-  const url = (u: string) => strict['git.clone'](ctx({ url: u, dir: 'a' }))
+  const url = (u: string) => strict['git.prepare'](ctx({ project: 'a', url: u, branch: 'b' }))
   for (const u of ['--upload-pack=calc', '-oProxyCommand=x', 'ext::sh -c touch pwned', 'file:///etc/passwd', '/tmp/depot', 'C:/depot', 'http://github.com/a/b', 'https://user:pass@github.com/a/b', 'https://github.com/a b', 'git://github.com/a/b', 'ftp://x/y']) {
     await rejects(url(u), /Adresse de depot refusee/)
   }
-  const { ws, h } = setup()
-  await h['git.clone'](ctx({ url: remote(), dir: 'r' }))
-  for (const name of ['--help', '-x', 'a..b', 'a//b', 'fin/', 'x.lock', 'a b', 'a@{1}', 'a;rm', '$(id)', '`id`', 'x'.repeat(101)]) {
-    await rejects(h['git.branch'](ctx({ dir: 'r', name })), /Nom de branche invalide/)
-    await rejects(h['git.checkout'](ctx({ dir: 'r', branch: name })), /Nom de branche invalide/)
+  const { h, wt } = setup()
+  const bare = remote()
+  await h['git.prepare'](ctx({ project: 'r', url: bare, branch: 'ok' }))
+  for (const name of ['--help', '-x', 'a..b', 'a//b', 'fin/', 'x.lock', 'a b', 'a@{1}', 'a;rm', '$(id)', '`id`', 'a+b', '.cache/x', 'x'.repeat(101), 'con', 'a/nul']) {
+    await rejects(h['git.prepare'](ctx({ project: 'r', url: bare, branch: name })), /Nom de branche invalide/)
+    await rejects(h['git.pull'](ctx({ project: 'r', branch: name })), /Nom de branche invalide/)
   }
-  await rejects(h['git.branch'](ctx({ dir: 'r', name: 'ok', from: '--orphan' })), /Nom de branche invalide/)
-  await rejects(h['git.push'](ctx({ dir: 'r', branch: '--force' })), /Nom de branche invalide/)
-  await rejects(h['git.pull'](ctx({ dir: 'r', token: 'court' })), /Jeton invalide/)
-  await rejects(h['git.pull'](ctx({ dir: 'r', token: 'abc def ghi jkl' })), /Jeton invalide/)
-  await rejects(h['git.pull'](ctx({ dir: 'r', token: 42 })), /invalide/)
-  assert.equal(git(join(ws!, 'r'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'rien n\'a ete execute')
+  await rejects(h['git.prepare'](ctx({ project: 'r', url: bare, branch: 'ok2', base: '--orphan' })), /Nom de branche invalide/)
+  await rejects(h['git.push'](ctx({ project: 'r', branch: '--force' })), /Nom de branche invalide/)
+  await rejects(h['git.pull'](ctx({ project: 'r', branch: 'ok', token: 'court' })), /Jeton invalide/)
+  await rejects(h['git.pull'](ctx({ project: 'r', branch: 'ok', token: 'abc def ghi jkl' })), /Jeton invalide/)
+  await rejects(h['git.pull'](ctx({ project: 'r', branch: 'ok', token: 42 })), /invalide/)
+  assert.equal(git(wt('r', 'ok'), 'rev-parse', '--abbrev-ref', 'HEAD'), 'ok', 'rien n\'a ete execute')
 })
 
-test('le jeton n\'apparait jamais dans les erreurs ni dans la configuration du depot', async () => {
+test('le jeton n\'apparait jamais dans les erreurs ni dans les evenements', async () => {
   const secret = 'ghp_SECRET1234567890abcdef'
   const ws = tmp()
   const h = gitHandlers({ workspace: () => ws }) // filtre par defaut : https
   const events: string[] = []
   try {
-    await h['git.clone'](ctx({ url: 'https://127.0.0.1:1/x/y', dir: 'p', token: secret }, events))
+    await h['git.prepare'](ctx({ project: 'p', url: 'https://127.0.0.1:1/x/y', branch: 'b', token: secret }, events))
     assert.fail('doit echouer')
   } catch (e) {
     assert.ok(!(e as Error).message.includes(secret))
     assert.ok(!(e as Error).message.includes(Buffer.from(`x-access-token:${secret}`).toString('base64')))
   }
   assert.ok(!events.join('\n').includes(secret))
-  assert.ok(!existsSync(join(ws, 'p', '.git', 'config')) || !readFileSync(join(ws, 'p', '.git', 'config'), 'utf8').includes(secret))
+  const cfg = join(ws, 'p', 'repo', '.git', 'config')
+  assert.ok(!existsSync(cfg) || !readFileSync(cfg, 'utf8').includes(secret))
 })
 
 test('annulation : la commande git est interrompue', async () => {
-  const ws = tmp()
-  const h = gitHandlers({ workspace: () => ws, allowUrl: () => true })
+  const h = gitHandlers({ workspace: () => tmp(), allowUrl: () => true })
   const ac = new AbortController()
   ac.abort()
-  await assert.rejects(h['git.clone']({ jobId: 1, payload: { url: remote(), dir: 'z' }, signal: ac.signal, event: () => {} }), /annulee/)
+  await assert.rejects(h['git.prepare']({ jobId: 1, payload: { project: 'z', url: remote(), branch: 'b' }, signal: ac.signal, event: () => {} }), /annulee/)
+})
+
+test('nettoyage a 3 jours : supprime ce qui est propre et pousse, garde tout le reste', async () => {
+  const bare = remote()
+  const { ws, g, h, clock, wt } = setup()
+  const T0 = clock.t
+  for (const b of ['propre', 'modifie', 'nonpousse']) await h['git.prepare'](ctx({ project: 'jeu', url: bare, branch: b }))
+  for (const b of ['propre', 'modifie', 'nonpousse']) { commit(wt('jeu', b), `${b}.txt`, b); await h['git.push'](ctx({ project: 'jeu', branch: b })) }
+  writeFileSync(join(wt('jeu', 'modifie'), 'wip.txt'), 'travail en cours') // fichier non enregistre
+  commit(wt('jeu', 'nonpousse'), 'encore.txt', 'local seulement') // commit non pousse
+  assert.deepEqual((await g.sweep()), { removed: [], kept: [] }, 'rien d\'ancien : rien a faire')
+
+  clock.t = T0 + 2 * DAY
+  assert.deepEqual((await g.sweep()).removed, [], '2 jours : trop tot')
+
+  clock.t = T0 + 4 * DAY
+  const r = await g.sweep()
+  assert.deepEqual(r.removed, ['jeu/propre'])
+  assert.deepEqual(r.kept.map((k) => [k.item, k.reason]).sort(), [['jeu/modifie', 'modifications non enregistrees'], ['jeu/nonpousse', 'commits non pousses']])
+  assert.ok(!existsSync(wt('jeu', 'propre')))
+  assert.ok(existsSync(join(wt('jeu', 'modifie'), 'wip.txt')) && existsSync(wt('jeu', 'nonpousse')), 'rien n\'est perdu')
+  assert.ok(existsSync(join(ws!, 'jeu', 'repo')), 'le clone principal reste tant qu\'il y a des dossiers de travail')
+
+  // une fois le travail sauvegarde (commit + push), le nettoyage suivant peut tout retirer, clone principal compris
+  git(wt('jeu', 'modifie'), 'add', '.'); git(wt('jeu', 'modifie'), 'commit', '-q', '-m', 'wip')
+  await h['git.push'](ctx({ project: 'jeu', branch: 'modifie' }))
+  await h['git.push'](ctx({ project: 'jeu', branch: 'nonpousse' }))
+  clock.t = T0 + 8 * DAY
+  const last = await g.sweep()
+  assert.deepEqual(last.removed.sort(), ['jeu', 'jeu/modifie', 'jeu/nonpousse'])
+  assert.ok(!existsSync(join(ws!, 'jeu')))
+  assert.deepEqual(g.registry(), [])
+
+  // et le tout se recree a la demande, avec le travail pousse
+  const back = await h['git.prepare'](ctx({ project: 'jeu', url: bare, branch: 'nonpousse' })) as Prepared
+  assert.deepEqual([back.cloned, back.created, back.newBranch], [true, true, false])
+  assert.ok(existsSync(join(wt('jeu', 'nonpousse'), 'encore.txt')))
+})
+
+test('nettoyage : l\'usage repousse l\'echeance, un dossier supprime a la main est oublie, tache dediee', async () => {
+  const bare = remote()
+  const { g, h, clock, wt } = setup()
+  const T0 = clock.t
+  await h['git.prepare'](ctx({ project: 'a', url: bare, branch: 'actif' }))
+  await h['git.prepare'](ctx({ project: 'a', url: bare, branch: 'oublie' }))
+  clock.t = T0 + 2.5 * DAY
+  await h['git.status'](ctx({ project: 'a', branch: 'actif' })) // utilise : l'echeance repart
+  clock.t = T0 + 4 * DAY
+  assert.deepEqual((await g.sweep()).removed, ['a/oublie'], 'seule la branche inutilisee part, le projet reste')
+  assert.ok(existsSync(wt('a', 'actif')))
+
+  const { rmSync } = await import('node:fs')
+  rmSync(wt('a', 'actif'), { recursive: true, force: true })
+  const viaJob = await h['git.cleanup'](ctx({ maxAgeDays: 0 })) as { removed: string[]; kept: unknown[] }
+  assert.deepEqual(viaJob.removed, ['a'], 'plus aucun dossier : le clone principal part aussi')
+  assert.deepEqual(g.registry(), [])
 })
 
 test('espace de travail : reglage depuis l\'agent, ecrit dans .env sans toucher au reste', () => {
