@@ -353,3 +353,14 @@ test('code de jumelage : affiche a la creation, accepte tel quel par le Worker',
     await agent.stop()
   } finally { await t.close() }
 })
+
+test('la page du code de jumelage ne se recharge jamais toute seule', async () => {
+  const t = await setup()
+  try {
+    t.c.hub.enqueue(t.userId, 'sleep', { ms: 10 }) // une tache en attente declenche normalement le rafraichissement
+    const created = await t.c.call('POST', '/workers', { csrf: t.csrf, name: 'Mon PC' })
+    assert.match(created.text, /rpm1\./)
+    assert.ok(!created.text.includes('http-equiv="refresh"'))
+    assert.match((await t.c.call('GET', '/workers')).text, /http-equiv="refresh"/, 'la page normale se rafraichit toujours pendant une tache')
+  } finally { await t.close() }
+})

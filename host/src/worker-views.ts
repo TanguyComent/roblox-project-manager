@@ -48,7 +48,7 @@ RPM_WORKER_TOKEN=${r.token}`
     <li>Colle ce <strong>code de jumelage</strong> dans cette page, puis clique <em>Jumeler</em> :</li>
   </ol>
   <pre class="code">${esc(code)}</pre>
-  <p class="muted small">Le Worker se connecte <em>lui-meme</em> au Host : rien a ouvrir sur sa machine. Cette page s'actualise des qu'il apparait. Depuis cette page locale tu pourras aussi activer son demarrage automatique.</p>
+  <p class="muted small">Le Worker se connecte <em>lui-meme</em> au Host : rien a ouvrir sur sa machine. Depuis cette page locale tu pourras aussi activer son demarrage automatique.</p>
   <details class="change"><summary>Configuration manuelle (fichier .env)</summary>
     <p class="muted small">Alternative au code : cree <code>worker/.env</code> avec ces deux lignes.</p>
     <pre class="code">${esc(env)}</pre>
@@ -132,7 +132,7 @@ ${o.reveal ? reveal(o.reveal) : ''}
 <section class="card">
   <h2>Dernieres taches</h2>
   ${o.jobs.length ? `<ul class="exps">${jobRows}</ul>` : '<p class="muted">Aucune tache. Utilise « Tester » sur un Worker pour envoyer une tache d\'essai.</p>'}
-</section>`, { refreshSeconds: busy || (o.reveal && o.workers.every((w) => w.status === 'offline')) ? 3 : undefined })
+</section>`, { refreshSeconds: busy && !o.reveal ? 3 : undefined }) // jamais de rechargement tant que le code de jumelage est affiche
 }
 
 export function jobPage(o: Viewer & { job: Job; events: JobEvent[] }) {
