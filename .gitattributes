@@ -1,0 +1,3 @@
+worker/start.command text eol=lf
+worker/*.cmd text eol=crlf
+worker/*.vbs text eol=crlf

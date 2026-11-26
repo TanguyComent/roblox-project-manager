@@ -18,3 +18,17 @@ export type HostMessage =
 
 /** Codes de fermeture applicatifs : le Worker ne se reconnecte pas apres ceux-la (la situation ne se regle pas toute seule). */
 export const CLOSE = { badToken: 4401, badHello: 4400, replaced: 4409, revoked: 4403 } as const
+
+/** Code de jumelage affiche par le Host a la creation d'un Worker (voir host/src/worker-protocol.ts) : adresse du Host + jeton. */
+export const PAIRING_PREFIX = 'rpm1.'
+export function parsePairingCode(input: string): { hostUrl: string; token: string } | null {
+  const code = input.trim()
+  if (!code.startsWith(PAIRING_PREFIX) || code.length > 2000) return null
+  try {
+    const data = JSON.parse(Buffer.from(code.slice(PAIRING_PREFIX.length), 'base64url').toString('utf8')) as { u?: unknown; t?: unknown }
+    if (typeof data.u !== 'string' || typeof data.t !== 'string') return null
+    const url = new URL(data.u)
+    if (!['http:', 'https:'].includes(url.protocol) || !/^rpmw_[A-Za-z0-9_-]{20,200}$/.test(data.t)) return null
+    return { hostUrl: url.origin, token: data.t }
+  } catch { return null }
+}

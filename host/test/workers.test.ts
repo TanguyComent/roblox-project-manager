@@ -6,6 +6,10 @@ import { serve } from '@hono/node-server'
 import { createUser } from '../src/auth.ts'
 import { createPool, createWorker, getJob } from '../src/workers.ts'
 import { startWorker, type RunningWorker, type WorkerState } from '../../worker/src/worker.ts'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createAgent } from '../../worker/src/agent.ts'
 import { client, csrfOf, registerAndEnable } from './helpers.ts'
 
 type Client = ReturnType<typeof client>
@@ -76,7 +80,7 @@ test('le jeton n\'est affiche qu\'a la creation et n\'est stocke que haché', as
     assert.equal(created.res.status, 200)
     const token = /rpmw_[A-Za-z0-9_-]{20,}/.exec(created.text)?.[0]
     assert.ok(token, 'jeton affiche')
-    assert.match(created.text, /qu'une seule fois/)
+    assert.match(created.text, /une seule fois/)
     const later = await t.c.call('GET', '/workers')
     assert.ok(!later.text.includes(token!), 'jamais reaffiche')
     assert.match(later.text, /Mon PC/)
@@ -324,5 +328,28 @@ test('isolation entre utilisateurs', async () => {
     assert.ok(theirPool.ok)
     assert.equal((await t.c.call('POST', `/workers/${mine.id}/pool`, { csrf: t.csrf, poolId: String(theirPool.id) })).res.status, 400)
     assert.equal((await t.c.call('POST', `/pools/${theirPool.id}/test`, { csrf: t.csrf })).res.status, 404)
+  } finally { await t.close() }
+})
+
+test('code de jumelage : affiche a la creation, accepte tel quel par le Worker', async () => {
+  const t = await setup()
+  try {
+    const created = await t.c.call('POST', '/workers', { csrf: t.csrf, name: 'Mon PC' })
+    const code = /rpm1\.[A-Za-z0-9_-]+/.exec(created.text)?.[0]
+    assert.ok(code, 'code affiche')
+    assert.match(created.text, /start\.vbs/)
+    assert.ok(!(await t.c.call('GET', '/workers')).text.includes('rpm1.'), 'jamais reaffiche')
+
+    // le Worker n'a que ce code a coller : il ecrit son .env et se connecte
+    const envPath = join(mkdtempSync(join(tmpdir(), 'rpm-pair-')), '.env')
+    const agent = createAgent({ envPath, version: 't', info: {}, backoff: { minMs: 20, maxMs: 60 } })
+    // le code contient l'adresse publique configuree (localhost:3000) : on la remplace par celle du serveur de test
+    const parsed = JSON.parse(Buffer.from(code!.slice(5), 'base64url').toString())
+    const local = 'rpm1.' + Buffer.from(JSON.stringify({ u: t.url, t: parsed.t })).toString('base64url')
+    assert.equal((await agent.pair(local)).ok, true)
+    const id = (t.c.db.prepare('SELECT id FROM workers').get() as { id: number }).id
+    await waitFor(() => agent.snapshot().state === 'connected' && t.c.hub.status(id) === 'idle', 'Worker jumele connecte')
+    assert.equal(agent.snapshot().workerName, 'Mon PC')
+    await agent.stop()
   } finally { await t.close() }
 })

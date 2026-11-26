@@ -1,0 +1,97 @@
+// L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
+import { DEFAULT_ENV_PATH, readConfig, writeConfig } from './config.ts'
+import { parsePairingCode } from './protocol.ts'
+import { startWorker, type RunningWorker, type WorkerOptions, type WorkerState } from './worker.ts'
+
+export type AgentState = 'unconfigured' | 'stopped' | WorkerState
+
+export interface AgentSnapshot {
+  state: AgentState
+  hostUrl: string | null
+  workerName: string | null
+  detail: string
+  logs: string[]
+  startedAt: number
+}
+
+export interface Agent {
+  snapshot(): AgentSnapshot
+  start(): void
+  stop(): Promise<void>
+  pair(code: string): Promise<{ ok: true } | { ok: false; error: string }>
+  forget(): Promise<void>
+  log(message: string): void
+}
+
+const MAX_LOGS = 200
+
+export function createAgent(o: { envPath?: string; version: string; info: Record<string, unknown>; launch?: (opts: WorkerOptions) => RunningWorker; backoff?: WorkerOptions['backoff']; echo?: (line: string) => void }): Agent {
+  const envPath = o.envPath ?? DEFAULT_ENV_PATH
+  const launch = o.launch ?? startWorker
+  const logs: string[] = []
+  const startedAt = Date.now()
+  let state: AgentState = readConfig(envPath) ? 'stopped' : 'unconfigured'
+  let detail = ''
+  let workerName: string | null = null
+  let hostUrl: string | null = null
+  let current: RunningWorker | null = null
+  let generation = 0 // change a chaque (re)demarrage et a chaque arret : les evenements d'une connexion perimee sont ignores
+
+  const log = (message: string) => {
+    const line = `${new Date().toLocaleTimeString('fr-FR')}  ${message}`
+    logs.push(line)
+    if (logs.length > MAX_LOGS) logs.shift()
+    o.echo?.(line)
+  }
+
+  function start() {
+    if (current) return
+    const cfg = readConfig(envPath)
+    if (!cfg) { state = 'unconfigured'; detail = ''; hostUrl = null; return }
+    hostUrl = cfg.hostUrl
+    workerName = null
+    const gen = ++generation
+    current = launch({
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log,
+      onState: (s, d) => {
+        if (gen !== generation) return // evenement d'une ancienne connexion
+        state = s
+        detail = d ?? ''
+        if (s === 'connected') workerName = d ?? null
+        if (s === 'rejected') current = null
+      },
+    })
+    if (gen === generation && state !== 'rejected') { state = 'connecting'; detail = '' }
+  }
+
+  async function stop() {
+    const w = current
+    current = null
+    generation++
+    if (w) await w.stop()
+    state = readConfig(envPath) ? 'stopped' : 'unconfigured'
+    detail = ''
+    workerName = null
+  }
+
+  return {
+    snapshot: () => ({ state, hostUrl, workerName, detail, logs: [...logs], startedAt }),
+    start, stop, log,
+    async pair(code) {
+      const parsed = parsePairingCode(code)
+      if (!parsed) return { ok: false, error: "Code de jumelage invalide : copie-le en entier depuis la page « Workers » du site (il commence par rpm1.)." }
+      writeConfig(parsed, envPath)
+      log(`jumele avec ${parsed.hostUrl}`)
+      await stop()
+      start()
+      return { ok: true }
+    },
+    async forget() {
+      await stop()
+      writeConfig(null, envPath)
+      hostUrl = null
+      state = 'unconfigured'
+      log('jumelage supprime')
+    },
+  }
+}

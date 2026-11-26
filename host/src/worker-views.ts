@@ -2,6 +2,7 @@
 import { alert, appPage, csrfField, esc, type Viewer } from './views.ts'
 import type { Job, JobEvent, Pool, Worker } from './workers.ts'
 import type { WorkerStatus } from './worker-hub.ts'
+import { encodePairingCode } from './worker-protocol.ts'
 
 export type WorkerView = Worker & { status: WorkerStatus }
 
@@ -35,18 +36,23 @@ const infoLine = (w: Worker) => {
 export interface RevealedToken { name: string; token: string; hostUrl: string }
 
 function reveal(r: RevealedToken) {
-  const ps = `cd worker\nnpm install\n$env:RPM_HOST_URL = '${r.hostUrl}'\n$env:RPM_WORKER_TOKEN = '${r.token}'\nnpm start`
-  const sh = `cd worker\nnpm install\nRPM_HOST_URL='${r.hostUrl}' RPM_WORKER_TOKEN='${r.token}' npm start`
+  const code = encodePairingCode(r.hostUrl, r.token)
+  const env = `RPM_HOST_URL=${r.hostUrl}
+RPM_WORKER_TOKEN=${r.token}`
   return `
 <section class="card reveal">
-  <h2>Worker « ${esc(r.name)} » : lance-le sur la machine</h2>
-  <p class="alert ok">Ce jeton n'est affiche <strong>qu'une seule fois</strong> : copie-le maintenant. S'il est perdu, regenere-en un.</p>
-  <p class="muted small">Depuis le dossier du projet (Node 24 ou plus recent) :</p>
-  <p class="muted small"><strong>PowerShell</strong></p>
-  <pre class="code">${esc(ps)}</pre>
-  <p class="muted small"><strong>Bash / macOS / Linux</strong></p>
-  <pre class="code">${esc(sh)}</pre>
-  <p class="muted small">Le Worker se connecte <em>lui-meme</em> au Host : rien a ouvrir sur sa machine. La page s'actualise des qu'il apparait.</p>
+  <h2>Worker « ${esc(r.name)} » : relie-le a ta machine</h2>
+  <p class="alert ok">Ce code contient le jeton du Worker : il n'est affiche qu'<strong>une seule fois</strong>. S'il est perdu, regenere un jeton.</p>
+  <ol class="steps">
+    <li>Sur la machine du Worker, lance-le : double-clic sur <code>worker/start.vbs</code> (Windows) ou <code>worker/start.command</code> (macOS / Linux). Une page s'ouvre (<code>http://127.0.0.1:4180</code>).</li>
+    <li>Colle ce <strong>code de jumelage</strong> dans cette page, puis clique <em>Jumeler</em> :</li>
+  </ol>
+  <pre class="code">${esc(code)}</pre>
+  <p class="muted small">Le Worker se connecte <em>lui-meme</em> au Host : rien a ouvrir sur sa machine. Cette page s'actualise des qu'il apparait. Depuis cette page locale tu pourras aussi activer son demarrage automatique.</p>
+  <details class="change"><summary>Configuration manuelle (fichier .env)</summary>
+    <p class="muted small">Alternative au code : cree <code>worker/.env</code> avec ces deux lignes.</p>
+    <pre class="code">${esc(env)}</pre>
+  </details>
 </section>`
 }
 

@@ -24,3 +24,11 @@ export type HostMessage =
 
 /** Codes de fermeture applicatifs (4000-4999). */
 export const CLOSE = { badToken: 4401, badHello: 4400, replaced: 4409, revoked: 4403 } as const
+
+/**
+ * Code de jumelage : une seule chaine a coller dans l'interface du Worker (adresse du Host + jeton).
+ * Il contient le jeton : il est traite comme lui (affiche une seule fois). Le decodage est dans worker/src/protocol.ts.
+ */
+export const PAIRING_PREFIX = 'rpm1.'
+export const encodePairingCode = (hostUrl: string, token: string) =>
+  PAIRING_PREFIX + Buffer.from(JSON.stringify({ u: hostUrl, t: token }), 'utf8').toString('base64url')

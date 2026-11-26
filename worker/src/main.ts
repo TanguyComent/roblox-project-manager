@@ -1,21 +1,51 @@
-// Lancement : RPM_HOST_URL=http://localhost:3000 RPM_WORKER_TOKEN=rpmw_... npm start
+// Lancement : double-clic sur start.vbs / start.cmd / start.command (ou `npm start`). Ouvre l'interface locale ; le jumelage est dans .env.
+// Options : --no-open (ne pas ouvrir le navigateur : utilise par le demarrage automatique).
+import { spawn } from 'node:child_process'
 import { hostname, platform, arch } from 'node:os'
-import { startWorker } from './worker.ts'
+import { createAgent } from './agent.ts'
+import { createAutostart } from './autostart.ts'
+import { uiPort } from './config.ts'
+import { createUi } from './ui.ts'
 
-const hostUrl = process.env.RPM_HOST_URL
-const token = process.env.RPM_WORKER_TOKEN
-if (!hostUrl || !token) {
-  console.error('Variables manquantes : RPM_HOST_URL (adresse du Host) et RPM_WORKER_TOKEN (jeton affiche a la creation du Worker).')
-  process.exit(2)
+const VERSION = '0.2.0'
+const noOpen = process.argv.includes('--no-open')
+const port = uiPort()
+const address = `http://127.0.0.1:${port}/`
+
+function openBrowser(url: string) {
+  const [cmd, args] = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]]
+  try { spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true }).on('error', () => {}).unref() } catch { /* pas de navigateur : l'adresse est affichee */ }
 }
 
-const log = (m: string) => console.log(`[worker ${new Date().toLocaleTimeString('fr-FR')}] ${m}`)
-const worker = startWorker({
-  hostUrl, token, log,
+const agent = createAgent({
+  version: VERSION,
   info: { hostname: hostname(), platform: platform(), arch: arch(), node: process.version },
-  onState: (s, d) => { if (s === 'rejected') process.exitCode = 1; void d },
+  echo: (line) => console.log(`[worker] ${line}`),
 })
 
-for (const sig of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(sig, () => { log('arret demande'); void worker.stop().then(() => process.exit(0)) })
+let shuttingDown = false
+const quit = async () => {
+  if (shuttingDown) return
+  shuttingDown = true
+  await agent.stop()
+  process.exit(0)
 }
+
+const server = createUi({ agent, autostart: createAutostart(), port, quit })
+server.on('error', (e: NodeJS.ErrnoException) => {
+  if (e.code === 'EADDRINUSE') {
+    // Deja lance : on montre simplement l'interface existante.
+    console.log(`Le Worker tourne deja : ${address}`)
+    if (!noOpen) openBrowser(address)
+    process.exit(0)
+  }
+  console.error(e)
+  process.exit(1)
+})
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Interface du Worker : ${address}`)
+  agent.start()
+  if (!noOpen) openBrowser(address)
+})
+
+for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => void quit())
