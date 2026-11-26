@@ -213,3 +213,14 @@ test('code de jumelage : tolere le texte autour et les retours a la ligne, expli
   assert.match(reason(code('localhost:3000')), /http/)
   assert.match(reason(code('http://x', 'court')), /jeton/)
 })
+
+test('interface : Origin « null » (formulaire sans referer) accepte avec le jeton, origine illisible ou inter-sites refusee', async () => {
+  const u = await ui()
+  try {
+    const csrf = await u.csrf()
+    assert.equal((await u.post('/stop', { csrf }, { origin: 'null' })).status, 303)
+    assert.equal((await u.post('/stop', { csrf }, { origin: 'pas une url' })).status, 403)
+    assert.equal((await u.post('/stop', { csrf }, { 'sec-fetch-site': 'cross-site' })).status, 403)
+    assert.equal((await u.post('/stop', { csrf: 'x' }, { origin: 'null' })).status, 403, 'sans le bon jeton, toujours refuse')
+  } finally { u.close() }
+})

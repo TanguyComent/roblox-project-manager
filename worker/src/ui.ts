@@ -100,7 +100,7 @@ ${configured ? `<section class="card"><details><summary>Changer de Host / rejume
 
   const send = (res: ServerResponse, status: number, body: string, type = 'text/html; charset=utf-8', extra: Record<string, string> = {}) => {
     res.writeHead(status, {
-      'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer',
+      'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'same-origin',
       'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'", ...extra,
     })
     res.end(body)
@@ -131,8 +131,12 @@ ${configured ? `<section class="card"><details><summary>Changer de Host / rejume
       if (req.method !== 'POST') return send(res, 405, 'Methode refusee', 'text/plain')
 
       // Une page d'un autre site ne doit pas pouvoir piloter le Worker : origine + jeton CSRF.
+      // (Origin peut valoir « null » : le jeton CSRF ci-dessous reste exige. Sec-Fetch-Site, envoye par les navigateurs, refuse les requetes inter-sites.)
       const origin = req.headers.origin
-      if (origin && !allowedHosts.has(new URL(origin).host)) return send(res, 403, 'Origine refusee', 'text/plain')
+      let originHost: string | null = null
+      if (origin && origin !== 'null') { try { originHost = new URL(origin).host } catch { return send(res, 403, 'Origine refusee', 'text/plain') } }
+      if (originHost !== null && !allowedHosts.has(originHost)) return send(res, 403, 'Origine refusee', 'text/plain')
+      if (req.headers['sec-fetch-site'] === 'cross-site') return send(res, 403, 'Origine refusee', 'text/plain')
       const form = await readForm(req)
       if (!form || !sameToken(form.get('csrf') ?? '', csrf)) return send(res, 403, 'Jeton invalide', 'text/plain')
 
