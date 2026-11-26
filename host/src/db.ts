@@ -166,6 +166,30 @@ const MIGRATIONS = [
      text TEXT NOT NULL
    );
    CREATE INDEX job_events_job ON job_events(job_id, id);`,
+  // 9 : ciblage des taches par outils (requires) et chats IA des projets
+  `ALTER TABLE jobs ADD COLUMN requires TEXT;
+   CREATE TABLE chats (
+     id INTEGER PRIMARY KEY,
+     project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+     title TEXT NOT NULL,
+     branch TEXT NOT NULL,             -- branche git dediee a ce chat
+     session_id TEXT,                  -- conversation Claude Code a reprendre sur le Worker
+     worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,   -- Worker qui detient le dossier de travail et la session
+     created_at INTEGER NOT NULL,
+     updated_at INTEGER NOT NULL
+   );
+   CREATE INDEX chats_project ON chats(project_id, updated_at DESC);
+   CREATE TABLE chat_messages (
+     id INTEGER PRIMARY KEY,
+     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+     content TEXT NOT NULL DEFAULT '',
+     status TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('done', 'pending', 'failed', 'cancelled')),
+     job_id INTEGER,
+     details_json TEXT,                -- commits, diff, cout... (reponses de l'IA)
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX chat_messages_chat ON chat_messages(chat_id, id);`,
 ]
 
 export function openDb(file?: string): Db {

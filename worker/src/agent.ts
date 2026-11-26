@@ -1,5 +1,6 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
 import { DEFAULT_ENV_PATH, readConfig, readWorkspace, workspaceProblem, writeConfig, writeWorkspace } from './config.ts'
+import { aiHandlers } from './ai.ts'
 import { createGit, type RegistryView, type SweepResult } from './git.ts'
 import { detectCapabilities } from './capabilities.ts'
 import { readPairingInput, type Capability } from './protocol.ts'
@@ -36,7 +37,7 @@ export interface Agent {
 
 const MAX_LOGS = 200
 
-export function createAgent(o: { envPath?: string; version: string; info: Record<string, unknown>; launch?: (opts: WorkerOptions) => RunningWorker; backoff?: WorkerOptions['backoff']; echo?: (line: string) => void; detect?: () => Promise<Capability[]>; git?: Partial<Parameters<typeof createGit>[0]> }): Agent {
+export function createAgent(o: { envPath?: string; version: string; info: Record<string, unknown>; launch?: (opts: WorkerOptions) => RunningWorker; backoff?: WorkerOptions['backoff']; echo?: (line: string) => void; detect?: () => Promise<Capability[]>; git?: Partial<Parameters<typeof createGit>[0]>; ai?: Partial<Parameters<typeof aiHandlers>[0]> }): Agent {
   const envPath = o.envPath ?? DEFAULT_ENV_PATH
   const launch = o.launch ?? startWorker
   const logs: string[] = []
@@ -47,6 +48,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
   let hostUrl: string | null = null
   let current: RunningWorker | null = null
   const gitInstance = createGit({ workspace: () => readWorkspace(envPath), ...o.git })
+  const aiInstance = aiHandlers({ git: gitInstance, ...o.ai })
   let caps: Capability[] = []
   let scanning = false
   const detect = o.detect ?? detectCapabilities
@@ -67,7 +69,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     workerName = null
     const gen = ++generation
     current = launch({
-      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: gitInstance.handlers,
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: { ...gitInstance.handlers, ...aiInstance },
       onState: (s, d) => {
         if (gen !== generation) return // evenement d'une ancienne connexion
         state = s

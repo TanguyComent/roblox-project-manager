@@ -15,10 +15,10 @@ const PING_MS = 20_000
 const HELLO_TIMEOUT_MS = 10_000
 const MAX_PAYLOAD = 1024 * 1024
 
-interface Conn { ws: WebSocket; workerId: number; userId: number; poolId: number | null; name: string; busyJobId: number | null; alive: boolean }
+interface Conn { ws: WebSocket; workerId: number; userId: number; poolId: number | null; name: string; busyJobId: number | null; alive: boolean; caps: string[] }
 
 export type WorkerStatus = 'offline' | 'idle' | 'busy'
-export interface Target { workerId?: number | null; poolId?: number | null }
+export interface Target { workerId?: number | null; poolId?: number | null; requires?: string[] }
 
 export class WorkerHub {
   private db: Db
@@ -75,7 +75,7 @@ export class WorkerHub {
     }
     const previous = this.conns.get(w.id)
     if (previous) { this.conns.delete(w.id); previous.ws.close(CLOSE.replaced, 'remplace par une nouvelle connexion'); this.interrupt(previous, 'Connexion remplacee') }
-    const conn: Conn = { ws, workerId: w.id, userId: w.user_id, poolId: w.pool_id, name: w.name, busyJobId: null, alive: true }
+    const conn: Conn = { ws, workerId: w.id, userId: w.user_id, poolId: w.pool_id, name: w.name, busyJobId: null, alive: true, caps: sanitizeCapabilities(msg.capabilities).map((c) => c.id) }
     this.conns.set(w.id, conn)
     const info = { ...(typeof msg.info === 'object' && msg.info ? msg.info : {}), version: String(msg.version ?? '').slice(0, 40), connectedAt: Date.now(), capabilities: sanitizeCapabilities(msg.capabilities) }
     touchWorker(this.db, w.id, info)
@@ -88,7 +88,12 @@ export class WorkerHub {
   private handle(conn: Conn, msg: WorkerMessage) {
     touchWorker(this.db, conn.workerId)
     if (msg.type === 'heartbeat') { conn.alive = true; return }
-    if (msg.type === 'capabilities') { setWorkerCapabilities(this.db, conn.workerId, msg.capabilities); return }
+    if (msg.type === 'capabilities') {
+      setWorkerCapabilities(this.db, conn.workerId, msg.capabilities)
+      conn.caps = sanitizeCapabilities(msg.capabilities).map((c) => c.id)
+      this.dispatch(conn.userId) // un outil qui apparait peut debloquer des taches en attente
+      return
+    }
     if (msg.type === 'event') {
       if (this.owns(conn, msg.jobId)) addJobEvent(this.db, msg.jobId, msg.level, msg.text)
       return
@@ -166,8 +171,14 @@ export class WorkerHub {
     return false
   }
 
+  /** Un Worker connecte de cet utilisateur (le Worker precise, s'il y en a un) a-t-il tous les outils demandes ? Sert a prevenir quand une tache n'a aucune chance de partir. */
+  hasCapable(userId: number, requires: string[], workerId?: number | null): boolean {
+    return [...this.conns.values()].some((c) => c.userId === userId && (workerId == null || c.workerId === workerId) && requires.every((r) => c.caps.includes(r)))
+  }
+
   private accepts(c: Conn, job: Job) {
     if (c.userId !== job.user_id || c.busyJobId !== null) return false
+    if (!job.requires.every((r) => c.caps.includes(r))) return false
     if (job.target_worker_id !== null) return c.workerId === job.target_worker_id
     if (job.target_pool_id !== null) return c.poolId === job.target_pool_id
     return true

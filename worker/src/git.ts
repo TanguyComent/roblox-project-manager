@@ -30,6 +30,12 @@ export interface Git {
   handlers: Record<string, JobHandler>
   sweep(maxAgeDays?: number): Promise<SweepResult>
   registry(): RegistryView[]
+  /** Dossier de travail (absolu) d'une branche deja preparee. */
+  worktreePath(project: string, branch: string): string
+  /** Lance une commande git dans le dossier d'une branche preparee (sortie renvoyee, rien n'est emis en evenement). */
+  exec(project: string, branch: string, args: string[], ctx: Pick<JobContext, 'signal' | 'event'>): Promise<string>
+  /** Marque un projet « en cours d'utilisation » le temps de `fn` : le nettoyage ne le touche pas. */
+  withProject<T>(project: string, fn: () => Promise<T>): Promise<T>
 }
 
 const DAY = 86_400_000
@@ -98,7 +104,7 @@ export function createGit(o: GitOptions): Git {
     return realpathSync(ws)
   }
 
-  function run(args: string[], r: { cwd: string; ctx: RunCtx; token?: string | null; timeoutMs?: number }): Promise<string> {
+  function run(args: string[], r: { cwd: string; ctx: RunCtx; token?: string | null; timeoutMs?: number; quiet?: boolean }): Promise<string> {
     const secret = r.token ? [r.token, Buffer.from(`x-access-token:${r.token}`).toString('base64')] : []
     const scrub = (s: string) => secret.reduce((t, x) => t.split(x).join('***'), s)
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' }
@@ -122,7 +128,7 @@ export function createGit(o: GitOptions): Git {
           if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(new GitError('git est introuvable sur cette machine.'))
           return reject(new GitError(`git ${args[0]} a echoue : ${tail || err.message}`.slice(0, 1500)))
         }
-        if (tail) r.ctx.event('info', `git ${args[0]} : ${tail}`.slice(0, 1500))
+        if (tail && !r.quiet) r.ctx.event('info', `git ${args[0]} : ${tail}`.slice(0, 1500))
         resolve(out)
       })
     })
@@ -341,6 +347,9 @@ export function createGit(o: GitOptions): Git {
   return {
     handlers,
     sweep,
+    withProject,
+    worktreePath: (project, branch) => worktree(workspaceOf(), project, branch),
+    exec: (project, branch, args, ctx) => run(args, { cwd: worktree(workspaceOf(), project, branch), ctx, quiet: true }),
     registry() {
       const ws = o.workspace()
       if (!ws || !existsSync(ws)) return []

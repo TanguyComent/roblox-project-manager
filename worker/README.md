@@ -46,6 +46,13 @@ Securite : aucun shell, chaque argument est valide (noms de projet et de branche
 Authentification : par defaut celle de la machine (gestionnaire d'identifiants git, cles ssh) ; le Host peut aussi fournir un `token` GitHub dans la tache : transmis par variables
 d'environnement (jamais en argument ni dans `.git/config`), limite a github.com, et masque dans les journaux.
 
+## Requetes IA (`ai.chat`)
+
+Prepare la branche (voir ci-dessus), lance le CLI **Claude Code** dessus (`claude -p --output-format json`, conversation reprise avec `--resume`), commite ce que l'IA aurait oublie de commiter,
+pousse la branche, et renvoie la reponse, les commits et le diff. Il faut que `claude` soit installe et connecte sur cette machine (`npm install -g @anthropic-ai/claude-code`, puis `claude` une fois).
+Le prompt passe par l'entree standard ; les droits de l'IA sont limites par un fichier de reglages : lecture / edition de fichiers, recherche et `git` (sans `push` ni `remote`), pas de reseau,
+et tout ce qui demanderait une autorisation est refuse (`--permission-prompts none`). Modifier `DEFAULT_ALLOW` / `DEFAULT_DENY` dans `src/ai.ts` pour changer ces droits.
+
 ## Configuration : `worker/.env`
 
 Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :

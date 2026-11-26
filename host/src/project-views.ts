@@ -203,6 +203,7 @@ export function projectPage(o: Viewer & { project: Project; experiences: Experie
     <dt>Compte Roblox</dt><dd>${(() => { const acc = o.accounts.find((a) => a.id === p.roblox_account_id); return acc ? `${esc(acc.label)}${acc.invalid ? ' <span class="pill warn">Cle invalide</span>' : ''}` : '<span class="muted">Aucun</span>' })()}</dd>
     <dt>Depot GitHub</dt><dd>${repoLink(p.github_repo)}</dd>
     <dt>Identifiant</dt><dd><code>${esc(p.slug)}</code></dd>
+    <dt>Chats IA</dt><dd><a href="/projects/${p.id}/chats">Ouvrir les chats du projet</a></dd>
   </dl>
   <details class="edit">
     <summary>Modifier le projet</summary>

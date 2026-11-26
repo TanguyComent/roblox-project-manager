@@ -11,14 +11,14 @@ export const esc = (s: unknown) =>
 
 const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="url(#g)"/><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d8cff"/><stop offset="1" stop-color="#9b6dff"/></linearGradient></defs><path d="M9 11.5 16 8l7 3.5v9L16 24l-7-3.5z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M9 11.5 16 15l7-3.5M16 15v9" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`
 
-export function layout(title: string, body: string, opts: { wide?: boolean; refreshSeconds?: number } = {}) {
+export function layout(title: string, body: string, opts: { wide?: boolean; refreshSeconds?: number; refreshUrl?: string } = {}) {
   return `<!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-${opts.refreshSeconds ? `<meta http-equiv="refresh" content="${Math.max(2, Math.floor(opts.refreshSeconds))}">\n` : ''}<title>${esc(title)} · ${esc(config.appName)}</title>
+${opts.refreshSeconds ? `<meta http-equiv="refresh" content="${Math.max(2, Math.floor(opts.refreshSeconds))}${opts.refreshUrl ? `;url=${esc(opts.refreshUrl)}` : ''}">\n` : ''}<title>${esc(title)} · ${esc(config.appName)}</title>
 <link rel="stylesheet" href="/static/app.css?v=${fileVersion('app.css')}">
 <script src="/static/app.js?v=${fileVersion('app.js')}" defer></script>
 </head>
@@ -140,7 +140,7 @@ ${brand}
 export interface Viewer { email: string; csrf: string }
 
 // Page d'une session complete : barre de navigation commune (Projets, Compte) + deconnexion.
-export function appPage(title: string, v: Viewer, active: 'projects' | 'workers' | 'account', body: string, opts: { refreshSeconds?: number } = {}) {
+export function appPage(title: string, v: Viewer, active: 'projects' | 'workers' | 'account', body: string, opts: { refreshSeconds?: number; refreshUrl?: string } = {}) {
   const link = (href: string, label: string, key: string) => `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ''}>${label}</a>`
   return layout(title, `
 <header class="topbar">
@@ -151,7 +151,7 @@ export function appPage(title: string, v: Viewer, active: 'projects' | 'workers'
     <form method="post" action="/logout" class="inline">${csrfField(v.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>
   </div>
 </header>
-${body}`, { wide: true, refreshSeconds: opts.refreshSeconds })
+${body}`, { wide: true, refreshSeconds: opts.refreshSeconds, refreshUrl: opts.refreshUrl })
 }
 
 export interface RobloxCardData {

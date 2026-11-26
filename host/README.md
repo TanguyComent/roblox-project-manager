@@ -108,3 +108,15 @@ affiche qu'une fois, stocke uniquement hache), le ranger dans un **pool**, lui e
 - Derriere un reverse proxy, faire suivre les « Upgrade » WebSocket vers `/ws/worker`.
 
 Voir [`../worker/README.md`](../worker/README.md) pour lancer un Worker.
+
+## Chats IA
+
+Chaque projet a ses **chats IA** (page *Projets → un projet → Chats IA*) : creer, ouvrir, supprimer. Un chat = **une branche git dediee** (`ai/chat-<n>-<titre>`) + une conversation Claude Code.
+Envoyer un message cree une tache `ai.chat` pour un de tes Workers qui a **Git et Claude Code** (outils detectes, voir ci-dessus) ; le Worker prepare le dossier de la branche, lance
+`claude -p`, commite, pousse la branche, et renvoie la reponse, les commits et le diff, que le Host **stocke** dans le chat. Les messages suivants retournent sur le meme Worker et reprennent
+la meme conversation ; si ce Worker est supprime, un autre prend le relais (nouvelle conversation, meme branche, le travail pousse est retrouve).
+
+- Le projet doit avoir un **depot GitHub** ; il est clone par le Worker avec l'authentification de la machine (gestionnaire d'identifiants git ou cle ssh).
+- Une reponse a la fois par chat ; elle peut etre annulee (le processus Claude est arrete). Supprimer un chat arrete sa reponse en cours ; la branche reste sur GitHub.
+- Une tache peut exiger des outils (`requires`) : elle ne part que sur un Worker qui les a, et attend sinon (un outil detecte plus tard la debloque).
+- Les reponses de l'IA sont affichees echappees (jamais interpretees comme du HTML).

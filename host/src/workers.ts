@@ -13,6 +13,8 @@ export interface Worker {
 export interface Job {
   id: number; user_id: number; kind: string; payload: unknown
   target_worker_id: number | null; target_pool_id: number | null; worker_id: number | null; worker_name: string | null
+  /** Outils que le Worker doit avoir (identifiants de capacites, ex. git, claude). */
+  requires: string[]
   status: JobStatus; result: unknown; error: string | null
   created_at: number; started_at: number | null; finished_at: number | null
 }
@@ -129,14 +131,14 @@ export function touchWorker(db: Db, id: number, info?: Record<string, unknown>) 
 }
 
 // --- taches ------------------------------------------------------------------------------------------------------------------
-type JobRow = Omit<Job, 'payload' | 'result'> & { payload_json: string; result_json: string | null }
+type JobRow = Omit<Job, 'payload' | 'result' | 'requires'> & { payload_json: string; result_json: string | null; requires: string | null }
 const toJob = (r: JobRow): Job => {
   const { payload_json, result_json, ...rest } = r
   const parse = (t: string | null) => { if (t === null) return null; try { return JSON.parse(t) as unknown } catch { return null } }
-  return { ...rest, payload: parse(payload_json), result: parse(result_json) }
+  return { ...rest, requires: (r.requires ?? '').split(',').filter(Boolean), payload: parse(payload_json), result: parse(result_json) }
 }
 const JOB_SELECT = `SELECT j.id, j.user_id, j.kind, j.payload_json, j.target_worker_id, j.target_pool_id, j.worker_id, w.name AS worker_name,
-  j.status, j.result_json, j.error, j.created_at, j.started_at, j.finished_at FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id`
+  j.requires, j.status, j.result_json, j.error, j.created_at, j.started_at, j.finished_at FROM jobs j LEFT JOIN workers w ON w.id = j.worker_id`
 
 export const getJob = (db: Db, userId: number, id: number) => {
   const r = db.prepare(`${JOB_SELECT} WHERE j.id = ? AND j.user_id = ?`).get(id, userId) as unknown as JobRow | undefined
@@ -147,10 +149,11 @@ export const listJobs = (db: Db, userId: number, limit = 20) =>
 export const queuedJobs = (db: Db, userId?: number) =>
   (db.prepare(`${JOB_SELECT} WHERE j.status = 'queued' ${userId === undefined ? '' : 'AND j.user_id = ?'} ORDER BY j.id`).all(...(userId === undefined ? [] : [userId])) as unknown as JobRow[]).map(toJob)
 
-export function insertJob(db: Db, userId: number, kind: string, payload: unknown, target: { workerId?: number | null; poolId?: number | null } = {}): number {
+export function insertJob(db: Db, userId: number, kind: string, payload: unknown, target: { workerId?: number | null; poolId?: number | null; requires?: string[] } = {}): number {
+  const requires = (target.requires ?? []).filter((x) => /^[a-z0-9_-]{1,32}$/.test(x))
   const r = db.prepare(
-    `INSERT INTO jobs (user_id, kind, payload_json, target_worker_id, target_pool_id, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
-  ).run(userId, kind, JSON.stringify(payload ?? {}).slice(0, 16_000), target.workerId ?? null, target.poolId ?? null, now())
+    `INSERT INTO jobs (user_id, kind, payload_json, target_worker_id, target_pool_id, requires, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
+  ).run(userId, kind, JSON.stringify(payload ?? {}).slice(0, 32_000), target.workerId ?? null, target.poolId ?? null, requires.length ? requires.join(',') : null, now())
   return Number(r.lastInsertRowid)
 }
 

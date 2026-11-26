@@ -19,6 +19,7 @@ import { createGithubClient, type GithubFactory } from './github.ts'
 import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
 import { projectRoutes } from './project-routes.ts'
+import { chatRoutes } from './chat-routes.ts'
 import { workerRoutes } from './worker-routes.ts'
 import { WorkerHub } from './worker-hub.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
@@ -45,7 +46,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
     try { return getConnInfo(c).remote.address ?? 'unknown' } catch { return 'unknown' }
   }
 
-  const html = (c: Context, body: string, status: 200 | 400 | 401 | 403 | 404 | 429 | 502 = 200) => {
+  const html = (c: Context, body: string, status: 200 | 400 | 401 | 403 | 404 | 409 | 429 | 502 = 200) => {
     c.header('Cache-Control', 'no-store')
     return c.html(body, status)
   }
@@ -61,7 +62,10 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
     if (config.secureCookies) c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
   })
 
-  app.use('*', bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) }))
+  // 16 Ko partout, sauf les messages de chat (jusqu'a 20 000 caracteres, soit 80 Ko en UTF-8).
+  const smallBody = bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
+  const chatBody = bodyLimit({ maxSize: 100 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
+  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : smallBody(c, next)))
 
   // --- controle d'origine : toute requete qui modifie l'etat doit venir de ce site ----------------------------------------------
   app.use('*', async (c, next) => {
@@ -151,7 +155,9 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   githubRoutes(app, shared)
   robloxRoutes(app, shared)
   projectRoutes(app, shared)
-  workerRoutes(app, { db, hub: opts.hub ?? new WorkerHub(db), html, form, csrfOk, requireFull: shared.requireFull })
+  const hub = opts.hub ?? new WorkerHub(db)
+  workerRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
+  chatRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {
