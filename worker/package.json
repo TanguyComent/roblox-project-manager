@@ -1,0 +1,16 @@
+{
+  "name": "rpm-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Worker du gestionnaire de projets Roblox : se connecte au Host et execute les taches.",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "typescript": "^7.0.2"
+  }
+}

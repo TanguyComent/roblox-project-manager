@@ -94,3 +94,17 @@ Pages : `/projects`, `/projects/new`, `/projects/:id`, `/account`.
 Worker (execution des agents, file de taches, routines), comptes IA, personnalisation du depot apres creation depuis le template
 (nom, groupe, identifiants de places), partage d'un projet entre utilisateurs. Recuperation de compte (si le telephone et les codes de secours sont perdus : pour l'instant il faut passer par la base), changement de mot de passe,
 envoi d'e-mails, gestion de plusieurs utilisateurs.
+
+## Workers
+
+Un **Worker** est une machine (ton PC, un Mac mini…) qui execute les taches pour le Host. Page **Workers** du site : creer un Worker (son jeton n'est
+affiche qu'une fois, stocke uniquement hache), le ranger dans un **pool**, lui envoyer une tache d'essai, suivre et annuler les taches.
+
+- **Connexion sortante** : le Worker ouvre lui-meme un WebSocket vers `/ws/worker` (rien a exposer sur sa machine). Premier message `hello` avec le jeton ;
+  jeton invalide / revoque / Worker remplace → fermeture 4401 / 4403 / 4409 et le Worker ne reessaie pas.
+- **Distribution** : file par utilisateur, dans l'ordre ; un Worker execute une tache a la fois ; une tache peut viser un Worker ou un pool (le premier libre la prend).
+  Un Worker ne recoit **jamais** les taches d'un autre utilisateur. Deconnexion pendant une tache → tache en echec ; annulation d'une tache en attente ou en cours.
+- Pour l'instant seules les taches d'essai `echo` et `sleep` existent (`src/worker-protocol.ts`).
+- Derriere un reverse proxy, faire suivre les « Upgrade » WebSocket vers `/ws/worker`.
+
+Voir [`../worker/README.md`](../worker/README.md) pour lancer un Worker.

@@ -19,6 +19,8 @@ import { createGithubClient, type GithubFactory } from './github.ts'
 import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
 import { projectRoutes } from './project-routes.ts'
+import { workerRoutes } from './worker-routes.ts'
+import { WorkerHub } from './worker-hub.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
 
 const COOKIE = config.secureCookies ? '__Host-sid' : 'sid'
@@ -27,7 +29,8 @@ const PUBLIC_DIR = join(import.meta.dirname, '..', 'public')
 export type Env = { Variables: { auth: { session: Session; user: User; token: string } | null } }
 
 // opts.githubFor : fabrique de client GitHub a partir du jeton d'un utilisateur (remplacable dans les tests).
-export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: RobloxClient; robloxFetch?: typeof fetch } = {}) {
+// opts.hub : concentrateur des Workers connectes (il doit etre rattache au serveur HTTP : hub.attach(server)).
+export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: RobloxClient; robloxFetch?: typeof fetch; hub?: WorkerHub } = {}) {
   const app = new Hono<Env>()
   // Tentatives de connexion : par adresse IP (large) et par e-mail (strict, uniquement les echecs).
   const ipLimit = new RateLimiter(30, 15 * 60_000)
@@ -148,6 +151,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   githubRoutes(app, shared)
   robloxRoutes(app, shared)
   projectRoutes(app, shared)
+  workerRoutes(app, { db, hub: opts.hub ?? new WorkerHub(db), html, form, csrfOk, requireFull: shared.requireFull })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {

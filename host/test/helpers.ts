@@ -2,13 +2,15 @@ import { createApp } from '../src/app.ts'
 import { decryptSecret, totpAt, TOTP_STEP } from '../src/crypto.ts'
 import { openDb } from '../src/db.ts'
 import { resetRobloxCaches } from '../src/roblox-accounts.ts'
+import { WorkerHub } from '../src/worker-hub.ts'
 
 export const ORIGIN = 'http://localhost:3000'
 
 export function client(opts: Parameters<typeof createApp>[1] = {}) {
   resetRobloxCaches()
   const db = openDb(':memory:')
-  const app = createApp(db, opts)
+  const hub = new WorkerHub(db)
+  const app = createApp(db, { hub, ...opts })
   let cookie = ''
   const call = async (method: string, path: string, body?: Record<string, string>, headers: Record<string, string> = {}) => {
     const res = await app.request(`${ORIGIN}${path}`, {
@@ -21,7 +23,7 @@ export function client(opts: Parameters<typeof createApp>[1] = {}) {
     if (set) cookie = set.startsWith('sid=;') || /max-age=0/i.test(set) ? '' : set.split(';')[0]
     return { res, text: await res.text() }
   }
-  return { db, call, setCookie: (c: string) => { cookie = c }, getCookie: () => cookie }
+  return { db, app, hub, call, setCookie: (c: string) => { cookie = c }, getCookie: () => cookie }
 }
 
 export const csrfOf = (html: string) => /name="csrf" value="([^"]+)"/.exec(html)![1]

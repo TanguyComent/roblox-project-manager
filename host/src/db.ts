@@ -122,6 +122,50 @@ const MIGRATIONS = [
      created_at INTEGER NOT NULL,
      UNIQUE (user_id, key_hash)
    );`,
+  // 8 : Workers (machines qui executent les taches), pools de Workers, taches et leurs evenements. Tout appartient a UN utilisateur.
+  `CREATE TABLE worker_pools (
+     id INTEGER PRIMARY KEY,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     UNIQUE (user_id, name)
+   );
+   CREATE TABLE workers (
+     id INTEGER PRIMARY KEY,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     pool_id INTEGER REFERENCES worker_pools(id) ON DELETE SET NULL,
+     name TEXT NOT NULL,
+     token_hash TEXT NOT NULL UNIQUE,   -- sha256 du jeton ; le jeton lui-meme n'est montre qu'une fois
+     last_seen_at INTEGER,
+     info_json TEXT NOT NULL DEFAULT '{}',
+     created_at INTEGER NOT NULL,
+     UNIQUE (user_id, name)
+   );
+   CREATE TABLE jobs (
+     id INTEGER PRIMARY KEY,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     kind TEXT NOT NULL,
+     payload_json TEXT NOT NULL DEFAULT '{}',
+     target_worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,  -- un Worker precis,
+     target_pool_id INTEGER REFERENCES worker_pools(id) ON DELETE SET NULL, -- ou un pool, ou (les deux nuls) n'importe lequel des Workers de l'utilisateur
+     worker_id INTEGER REFERENCES workers(id) ON DELETE SET NULL,         -- celui qui l'execute / l'a executee
+     status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+     result_json TEXT,
+     error TEXT,
+     created_at INTEGER NOT NULL,
+     started_at INTEGER,
+     finished_at INTEGER
+   );
+   CREATE INDEX jobs_user ON jobs(user_id, id DESC);
+   CREATE INDEX jobs_status ON jobs(status);
+   CREATE TABLE job_events (
+     id INTEGER PRIMARY KEY,
+     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+     at INTEGER NOT NULL,
+     level TEXT NOT NULL,
+     text TEXT NOT NULL
+   );
+   CREATE INDEX job_events_job ON job_events(job_id, id);`,
 ]
 
 export function openDb(file?: string): Db {

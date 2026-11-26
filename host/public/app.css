@@ -178,3 +178,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 optgroup { color: var(--muted); font-style: normal; }
 ul.diag { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
 ul.diag li { padding: 8px 10px; background: #0e1220; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; }
+
+/* Workers */
+.pill.bad { color: var(--err); background: rgba(255, 107, 125, .12); }
+pre.code { margin: 8px 0 14px; padding: 12px 14px; background: #0a0d18; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; user-select: all; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+.reveal { border-color: rgba(79, 209, 160, .35); }
+.events { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+.events li.warn { color: var(--warn); }
+.events li.error { color: var(--err); }
+.worker .row-main { display: grid; gap: 3px; }
+.acct-actions { display: flex; gap: 8px; align-items: center; }
