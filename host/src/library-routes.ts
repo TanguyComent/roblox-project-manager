@@ -9,9 +9,9 @@ import type { Context, Hono } from 'hono'
 import { config } from './config.ts'
 import type { Env } from './app.ts'
 import {
-  LibraryError, addImage, addZip, cancelSortJobs, discard, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
+  LibraryError, addImage, addZip, findResult, startFind, cancelSortJobs, discard, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
 } from './library.ts'
-import { groupOf, libraryGridHtml, libraryPage } from './library-views.ts'
+import { findResultsHtml, groupOf, libraryGridHtml, libraryPage, viewOf, type View } from './library-views.ts'
 import type { Db } from './db.ts'
 import type { WorkerHub } from './worker-hub.ts'
 import { autoPublishOf, publishImages, publishTargets, resolveTarget, setAutoPublish, syncPublishing } from './library-publish.ts'
@@ -43,13 +43,14 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     return { autoPublish: autoPublishOf(db, a.user.id), targets: publishTargets(db, a.user.id), images: listImages(db, a.user.id), counts, error: sync.error ?? undefined, noWorker: (counts.pending > 0 || counts.sorting > 0) && !hub.hasCapable(a.user.id, SORT_REQUIRES, null) }
   }
   const viewer = (a: Auth) => ({ email: a.user.email, csrf: a.session.csrf })
-  const back = (c: Context) => c.redirect('/library', 303)
+  // retour a la vue d'ou vient le formulaire (champ cache « view »), jamais une adresse libre
+  const back = (c: Context, view = '') => c.redirect(`/library?view=${view === 'pending' ? 'pending' : 'sorted'}`, 303)
 
   app.get('/library', async (c) => {
     const a = requireFull(c)
     if (a instanceof Response) return a
     await syncPublishing(db, roblox, a.user.id).catch(() => 0)
-    return html(c, libraryPage({ ...viewer(a), ...state(a), group: groupOf(c.req.query('group')), page: pageOf(c), q: queryOf(c) }))
+    return html(c, libraryPage({ ...viewer(a), ...state(a), group: groupOf(c.req.query('group')), page: pageOf(c), q: queryOf(c), view: viewOf(c.req.query('view'), state(a).counts) }))
   })
 
   app.get('/library/live', async (c) => {
@@ -58,7 +59,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     await syncPublishing(db, roblox, a.user.id).catch(() => 0)
     const s = state(a)
     c.header('Cache-Control', 'no-store')
-    return c.json({ html: libraryGridHtml(s.images, a.session.csrf, { group: groupOf(c.req.query('group')), targets: s.targets, page: pageOf(c), q: queryOf(c) }), counts: s.counts, error: s.error ?? null })
+    return c.json({ html: libraryGridHtml(s.images, a.session.csrf, { view: viewOf(c.req.query('view'), s.counts), group: groupOf(c.req.query('group')), targets: s.targets, page: pageOf(c), q: queryOf(c) }), counts: s.counts, error: s.error ?? null })
   })
 
   // Televersement : corps brut, nom dans X-File-Name, jeton CSRF dans X-CSRF.
@@ -126,7 +127,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   const fail = (c: Context, a: Auth, e: unknown) => {
     if (!(e instanceof LibraryError)) throw e
     if (wantsJson(c)) return c.json({ error: e.message }, e.status)
-    return html(c, libraryPage({ ...viewer(a), ...state(a), group: 'scope', error: e.message }), e.status === 413 ? 400 : e.status)
+    return html(c, libraryPage({ ...viewer(a), ...state(a), group: 'scope', view: 'sorted' as View, error: e.message }), e.status === 413 ? 400 : e.status)
   }
 
   app.post('/library/sort', async (c) => {
@@ -141,7 +142,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
       count = Math.min(count, imageCounts(db, p.a.user.id).pending)
     }
     try { startSort(db, hub, p.a.user.id, true, count) } catch (e) { return fail(c, p.a, e) }
-    return wantsJson(c) ? c.json({ ok: true }) : back(c)
+    return wantsJson(c) ? c.json({ ok: true }) : back(c, 'pending')
   })
 
   app.post('/library/sort/cancel', async (c) => {
@@ -149,14 +150,14 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     if ('res' in p) return p.res
     cancelSortJobs(db, hub, p.a.user.id)
     resetSorting(db, p.a.user.id)
-    return wantsJson(c) ? c.json({ ok: true }) : back(c)
+    return wantsJson(c) ? c.json({ ok: true }) : back(c, 'pending')
   })
 
   app.post('/library/:id{[0-9a-f]{32}}/edit', async (c) => {
     const p = await post(c)
     if ('res' in p) return p.res
     try { editImage(db, p.a.user.id, c.req.param('id'), { title: p.f.s('title'), scope: p.f.s('scope'), style: p.f.s('style'), traits: p.f.s('traits'), subject: p.f.s('subject'), colors: p.f.s('colors'), description: p.f.s('description'), tags: p.f.s('tags'), origin: p.f.s('origin') }) } catch (e) { return fail(c, p.a, e) }
-    return back(c)
+    return back(c, p.f.s('view'))
   })
 
   // Renomme (ou fusionne) une valeur de scope, de style ou de sujet sur toutes les images.
@@ -176,7 +177,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     const target = resolveTarget(db, p.a.user.id, p.f.s('target'))
     if ('error' in target) return fail(c, p.a, new LibraryError(target.error))
     await publishImages(db, roblox, p.a.user.id, [c.req.param('id')], target, 'manuel').catch(() => [])
-    return back(c)
+    return back(c, p.f.s('view'))
   })
 
   app.post('/library/settings', async (c) => {
@@ -186,10 +187,26 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     return back(c)
   })
 
+  // Recherche par description : un agent parcourt les images triees (tache library.find) ; la page interroge ensuite l'etat de la tache.
+  app.post('/library/find', async (c) => {
+    const p = await post(c)
+    if ('res' in p) return p.res
+    try { return c.json({ jobId: startFind(db, hub, p.a.user.id, p.f.s('query')) }) } catch (e) { return fail(c, p.a, e) }
+  })
+
+  app.get('/library/find/:job{[0-9]{1,12}}', (c) => {
+    const a = requireFull(c)
+    if (a instanceof Response) return a
+    const r = findResult(db, a.user.id, Number(c.req.param('job')))
+    c.header('Cache-Control', 'no-store')
+    if (!r) return c.json({ error: 'Recherche introuvable.' }, 404)
+    return c.json(r.state === 'done' ? { state: 'done', html: findResultsHtml(r.matches) } : r)
+  })
+
   app.post('/library/:id{[0-9a-f]{32}}/delete', async (c) => {
     const p = await post(c)
     if ('res' in p) return p.res
     try { if (!deleteImage(db, p.a.user.id, c.req.param('id'))) return fail(c, p.a, new LibraryError('Image introuvable.', 404)) } catch (e) { return fail(c, p.a, e) }
-    return back(c)
+    return back(c, p.f.s('view'))
   })
 }

@@ -220,5 +220,5 @@ test('tri d un nombre choisi : serie bornee, lots de 40 au plus, validation du n
   // nombre superieur a ce qui reste : borne ; vide : toutes
   assert.equal((await post('9999')).res.status, 200)
   assert.equal(payload(jobs()[2].id).want, 50)
-  assert.match((await t.c.call('GET', '/library')).text, /name="count"/)
+  assert.match((await t.c.call('GET', '/library?view=pending')).text, /name="count"/)
 })

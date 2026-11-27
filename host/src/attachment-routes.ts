@@ -76,7 +76,7 @@ export function attachmentRoutes(app: Hono<Env>, ctx: { db: Db; roblox: RobloxCl
     const token = /^Bearer\s+(\S+)$/.exec(c.req.header('authorization') ?? '')?.[1]
     const worker = token ? findWorkerByToken(db, token) : undefined
     if (!worker) return c.json({ error: 'Jeton invalide.' }, 403)
-    if (!db.prepare("SELECT 1 FROM jobs WHERE worker_id = ? AND status = 'running' AND kind = 'ai.chat'").get(worker.id)) return c.json({ error: 'Aucune conversation en cours sur ce Worker.' }, 403)
+    if (!db.prepare("SELECT 1 FROM jobs WHERE worker_id = ? AND status = 'running' AND kind IN ('ai.chat', 'library.find')").get(worker.id)) return c.json({ error: 'Aucune conversation ou recherche en cours sur ce Worker.' }, 403)
     const id = c.req.query('id')
     const q = (k: string) => c.req.query(k)?.slice(0, 100) || undefined
     const similar = q('similar')
@@ -91,10 +91,10 @@ export function attachmentRoutes(app: Hono<Env>, ctx: { db: Db; roblox: RobloxCl
     const id = c.req.param('id')
     const row = db.prepare('SELECT user_id, sha256 FROM library_images WHERE id = ?').get(id) as { user_id: number; sha256: string } | undefined
     if (!row || row.user_id !== worker.user_id) return c.json({ error: 'Introuvable.' }, 404)
-    const jobs = db.prepare("SELECT kind, payload_json FROM jobs WHERE worker_id = ? AND status = 'running' AND kind IN ('library.sort', 'ai.chat')").all(worker.id) as unknown as { kind: string; payload_json: string }[]
+    const jobs = db.prepare("SELECT kind, payload_json FROM jobs WHERE worker_id = ? AND status = 'running' AND kind IN ('library.sort', 'ai.chat', 'library.find')").all(worker.id) as unknown as { kind: string; payload_json: string }[]
     // tri : seulement les images citees par la tache ; chat : tout le catalogue TRIE de l'utilisateur (l'agent d'UI choisit lui-meme ses images)
     const cited = jobs.some((j) => {
-      if (j.kind === 'ai.chat') return isSorted(id)
+      if (j.kind === 'ai.chat' || j.kind === 'library.find') return isSorted(id)
       try { return (JSON.parse(j.payload_json).images as { id?: string }[] | undefined)?.some((x) => x.id === id) === true } catch { return false }
     })
     const data = cited ? readImage(id) : null

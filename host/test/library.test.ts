@@ -176,7 +176,7 @@ test('tri : echec ou annulation remettent les images en attente', async () => {
 test('page et suivi en direct : images, boutons, aucune fuite HTML', async () => {
   const t = await setup()
   const empty = (await t.c.call('GET', '/library')).text
-  assert.match(empty, /Ta bibliotheque est vide/)
+  assert.match(empty, /Aucune image triee/)
   const id = await t.add('<b>x</b>.png')
   await t.post(`/library/${id}/edit`, { description: '<script>alert(1)</script>' })
   const page = (await t.c.call('GET', '/library')).text
@@ -326,12 +326,17 @@ test('pagination : 48 images par page, recherche, page hors limites, suivi en di
   const p1 = (await t.c.call('GET', '/library')).text
   assert.equal(cards(p1), 48, 'une page seulement')
   assert.equal((p1.match(/<img src="\/library\//g) ?? []).length, 48, 'le navigateur ne recoit que 48 images')
-  assert.match(p1, /130 image\(s\) · 48 par page/)
-  assert.match(p1, /href="\/library\?group=scope&p=2"/)
-  assert.match(p1, /En attente <span class="count">10<\/span>/)
+  assert.match(p1, /120 image\(s\) · 48 par page/)
+  assert.match(p1, /href="\/library\?view=sorted&group=scope&p=2"/)
+  assert.match(p1, /En attente <span class="count">10<\/span>/, 'compteur de l\'onglet')
+  const pend = (await t.c.call('GET', '/library?view=pending')).text
+  assert.equal(cards(pend), 10, 'les images en attente sont dans leur propre vue')
+  assert.doesNotMatch(pend, /Retrouver une image par description/, 'la recherche IA ne porte que sur les images triees')
+  assert.match(pend, /name="count"/)
+  assert.doesNotMatch(p1, /name="count"/, 'le tri se lance depuis la vue En attente')
   assert.equal(cards((await t.c.call('GET', '/library?p=2')).text), 48)
-  assert.equal(cards((await t.c.call('GET', '/library?p=3')).text), 34)
-  assert.equal(cards((await t.c.call('GET', '/library?p=999')).text), 34, 'page hors limites : derniere page')
+  assert.equal(cards((await t.c.call('GET', '/library?p=3')).text), 24)
+  assert.equal(cards((await t.c.call('GET', '/library?p=999')).text), 24, 'page hors limites : derniere page')
   assert.equal(cards((await t.c.call('GET', '/library?p=abc')).text), 48)
   assert.equal(cards((await t.c.call('GET', '/library?p=-4')).text), 48)
   const found = (await t.c.call('GET', '/library?q=pendule')).text

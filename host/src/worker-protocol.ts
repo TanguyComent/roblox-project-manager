@@ -5,7 +5,7 @@ export const WORKER_WS_PATH = '/ws/worker'
 export const PROTOCOL_VERSION = 1
 
 /** Types de taches que le Host sait envoyer. Les autres seront ajoutes avec les agents, Studio, Blender... */
-export const JOB_KINDS = ['echo', 'sleep', 'git.prepare', 'git.pull', 'git.push', 'git.status', 'git.cleanup', 'ai.chat', 'library.sort'] as const
+export const JOB_KINDS = ['echo', 'sleep', 'git.prepare', 'git.pull', 'git.push', 'git.status', 'git.cleanup', 'ai.chat', 'library.sort', 'library.find'] as const
 export type JobKind = (typeof JOB_KINDS)[number]
 
 // Worker -> Host

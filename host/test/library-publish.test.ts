@@ -232,3 +232,107 @@ test('route Worker de publication : chat en cours, reglage, images generees, rem
   assert.equal(res.status, 409)
   assert.match(((await res.json()) as { error: string }).error, /compte Roblox/)
 })
+
+// --- recherche par description (library.find) ---------------------------------------------------------------------------------------------------
+
+import { findResult, startFind } from '../src/library.ts'
+import { finishJob as finishJobFind, getJob as getJobFind } from '../src/workers.ts'
+
+test('recherche par description : validation, une seule a la fois, uniquement des images triees', async () => {
+  const t = await setup()
+  const post = (query: string, csrf = t.csrf) => t.c.call('POST', '/library/find', { csrf, query }, { accept: 'application/json' })
+  assert.equal((await post('epee rouge')).res.status, 409, 'aucune image triee')
+  const a = await t.add('a.png')
+  await t.add('p.png', { status: 'pending' })
+  assert.equal((await post('')).res.status, 400)
+  assert.equal((await post('ab')).res.status, 400)
+  assert.equal((await post('epee', 'faux')).res.status, 403)
+  const ok = await post('Une epee rouge, style cartoon')
+  assert.equal(ok.res.status, 200)
+  const { jobId } = JSON.parse(ok.text) as { jobId: number }
+  const job = getJobFind(t.c.db, t.userId, jobId)!
+  assert.equal(job.kind, 'library.find')
+  assert.deepEqual(job.requires, ['claude'])
+  assert.deepEqual(job.payload, { query: 'Une epee rouge, style cartoon', limit: 12 })
+  assert.equal((await post('autre chose')).res.status, 409, 'une recherche est deja en cours')
+  assert.ok(a)
+  // le Worker : recherche autorisee pendant une recherche, jamais les images en attente
+  const w = createWorker(t.c.db, t.userId, 'PC', null)
+  assert.ok(w.ok)
+  markJobRunning(t.c.db, jobId, w.id)
+  const call = (path: string) => t.c.app.request(`${ORIGIN}${path}`, { headers: { authorization: `Bearer ${w.token}` } })
+  assert.equal((await call('/api/worker/library-search')).status, 200)
+  assert.equal((await call(`/api/worker/library/${a}`)).status, 200)
+  const pending = (t.c.db.prepare("SELECT id FROM library_images WHERE status = 'pending'").get() as { id: string }).id
+  assert.equal((await call(`/api/worker/library/${pending}`)).status, 404)
+})
+
+test('recherche par description : resultats revalides (images triees de l utilisateur, sans doublon, 12 au plus), etats et page', async () => {
+  const t = await setup()
+  const ids: string[] = []
+  for (let i = 0; i < 15; i++) ids.push(await t.add(`i${i}.png`))
+  const pending = await t.add('wait.png', { status: 'pending' })
+  const start = () => {
+    const post = startFind(t.c.db, t.c.hub, t.userId, 'description')
+    return post
+  }
+  const j = start()
+  assert.deepEqual(findResult(t.c.db, t.userId, j), { state: 'running' })
+  finishJobFind(t.c.db, j, 'succeeded', { matches: [
+    { id: ids[3], why: '<b>proche</b>' }, { id: ids[3], why: 'doublon' }, { id: 'f'.repeat(32), why: 'inconnue' }, { id: pending, why: 'en attente : refusee' },
+    '../../x', null, { id: 5 }, ...ids.map((id) => ({ id, why: 'ok' })),
+  ] })
+  const r = findResult(t.c.db, t.userId, j)
+  assert.equal(r!.state, 'done')
+  const matches = (r as { matches: { image: { id: string }; why: string }[] }).matches
+  assert.equal(matches.length, 12, '12 au plus')
+  assert.equal(matches[0].image.id, ids[3], 'ordre de l agent conserve')
+  assert.ok(!matches.some((m) => m.image.id === pending), 'jamais une image en attente')
+  assert.equal(new Set(matches.map((m) => m.image.id)).size, 12)
+  // la route renvoie un fragment HTML echappe
+  const res = JSON.parse((await t.c.call('GET', `/library/find/${j}`, undefined, { accept: 'application/json' })).text) as { state: string; html: string }
+  assert.equal(res.state, 'done')
+  assert.equal((res.html.match(/lib-card find/g) ?? []).length, 12)
+  assert.doesNotMatch(res.html, /<b>proche<\/b>/)
+  assert.match(res.html, /&lt;b&gt;proche&lt;\/b&gt;/)
+  assert.match(res.html, /1\. i3/)
+  // echec, annulation, tache d'un autre type ou inconnue
+  const j2 = start()
+  finishJobFind(t.c.db, j2, 'failed', undefined, 'Claude indisponible')
+  assert.deepEqual(findResult(t.c.db, t.userId, j2), { state: 'failed', error: 'La recherche a echoue : Claude indisponible' })
+  assert.equal(findResult(t.c.db, t.userId, 99999), null)
+  const other = t.c.hub.enqueue(t.userId, 'ai.chat', {}, { requires: [] })
+  assert.equal(findResult(t.c.db, t.userId, other), null, 'seulement les taches library.find')
+  assert.equal((await t.c.call('GET', `/library/find/${other}`, undefined, { accept: 'application/json' })).res.status, 404)
+  const empty = start()
+  finishJobFind(t.c.db, empty, 'succeeded', { matches: [] })
+  const none = JSON.parse((await t.c.call('GET', `/library/find/${empty}`, undefined, { accept: 'application/json' })).text) as { html: string }
+  assert.match(none.html, /Aucune image triee ne correspond/)
+  assert.equal((await t.c.app.request(`${ORIGIN}/library/find/${j}`)).status, 302, 'sans session')
+  // la page propose la recherche dans la vue des images triees seulement
+  assert.match((await t.c.call('GET', '/library')).text, /Retrouver une image par description/)
+  assert.doesNotMatch((await t.c.call('GET', '/library?view=pending')).text, /Retrouver une image par description/)
+})
+
+test('vues de la page : triees / en attente, formulaires qui reviennent a la bonne vue', async () => {
+  const t = await setup()
+  const sorted = await t.add('s.png')
+  const wait = await t.add('w.png', { status: 'pending' })
+  const s = (await t.c.call('GET', '/library?view=sorted')).text
+  const p = (await t.c.call('GET', '/library?view=pending')).text
+  assert.match(s, new RegExp(`id="i${sorted}"`))
+  assert.doesNotMatch(s, new RegExp(`id="i${wait}"`))
+  assert.match(p, new RegExp(`id="i${wait}"`))
+  assert.doesNotMatch(p, new RegExp(`id="i${sorted}"`))
+  assert.match(p, /name="view" value="pending"/)
+  assert.match(s, /name="view" value="sorted"/)
+  const edit = await t.c.call('POST', `/library/${wait}/edit`, { csrf: t.csrf, view: 'pending', description: 'x' })
+  assert.equal(edit.res.headers.get('location'), '/library?view=pending')
+  const bad = await t.c.call('POST', `/library/${sorted}/edit`, { csrf: t.csrf, view: 'https://evil.example', description: 'x' })
+  assert.equal(bad.res.headers.get('location'), '/library?view=sorted', 'jamais une adresse libre')
+  assert.equal((await t.c.call('POST', '/library/sort', { csrf: t.csrf, count: '1' })).res.headers.get('location'), '/library?view=pending')
+  // par defaut : « En attente » s'il n'y a encore rien de trie
+  const empty = await setup()
+  await empty.add('w.png', { status: 'pending' })
+  assert.match((await empty.c.call('GET', '/library')).text, /data-view="pending"/)
+})

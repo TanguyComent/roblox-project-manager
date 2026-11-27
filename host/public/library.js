@@ -57,7 +57,7 @@
     zipReports.length = 0
     for (const f of Array.from(files)) await upload(f)
     if (zipReports.length) sessionStorage.setItem('lib-notice', zipReports.join('\n'))
-    if (uploaded) location.reload(); else if (zipReports.length) notice(zipReports.join(' · '))
+    if (uploaded) location.href = '/library?view=pending'; else if (zipReports.length) notice(zipReports.join(' · '))
   }
   const saved = sessionStorage.getItem('lib-notice')
   if (saved) { sessionStorage.removeItem('lib-notice'); notice(saved.split('\n').join(' · ')) }
@@ -74,6 +74,41 @@
   document.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault() })
   document.addEventListener('dragleave', (e) => { if (hasFiles(e) && --depth <= 0) { depth = 0; drop.hidden = true } })
   document.addEventListener('drop', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; drop.hidden = true; addFiles(e.dataTransfer.files) })
+
+  // --- recherche par description : l'IA cherche, la page suit l'etat de la tache ---
+  const findForm = document.getElementById('lib-find-form')
+  const findOut = document.getElementById('lib-find-out')
+  if (findForm && findOut) {
+    const csrfFind = document.getElementById('lib-find').dataset.csrf
+    const btn = document.getElementById('lib-find-btn')
+    const say = (text, cls) => { findOut.textContent = ''; const p = document.createElement('p'); p.className = cls || 'muted'; p.textContent = text; findOut.append(p) }
+    let token = 0
+    findForm.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const query = document.getElementById('lib-find-q').value.trim()
+      if (query.length < 3) { say('Decris l\'image que tu cherches.', 'alert error'); return }
+      const mine = ++token
+      btn.disabled = true
+      say('Recherche en cours : l\'IA parcourt tes images triees…')
+      try {
+        const r = await fetch('/library/find', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: new URLSearchParams({ csrf: csrfFind, query }) })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) { say(j.error || 'Recherche impossible.', 'alert error'); return }
+        const started = Date.now()
+        for (;;) {
+          await new Promise((res) => setTimeout(res, 1800))
+          if (mine !== token) return
+          const s = await fetch('/library/find/' + j.jobId, { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+          const st = await s.json().catch(() => ({}))
+          if (st.state === 'done') { findOut.innerHTML = st.html; return }
+          if (st.state === 'failed') { say(st.error || 'La recherche a echoue.', 'alert error'); return }
+          if (!s.ok) { say(st.error || 'Recherche perdue.', 'alert error'); return }
+          if (Date.now() - started > 8 * 60 * 1000) { say('La recherche prend trop de temps : reessaie plus tard.', 'alert error'); return }
+          say('Recherche en cours : l\'IA parcourt tes images triees… (' + Math.round((Date.now() - started) / 1000) + ' s)')
+        }
+      } catch { say('Connexion impossible : reessaie.', 'alert error') } finally { if (mine === token) btn.disabled = false }
+    })
+  }
 
   // --- estimation du cout du tri (lots de 40, environ 0,15 $ par lot) ---
   const count = document.getElementById('lib-count')

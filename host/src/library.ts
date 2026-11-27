@@ -467,3 +467,40 @@ export async function addZip(db: Db, userId: number, zipPath: string, zipName: s
 
 /** Supprime un fichier temporaire sans jamais echouer. */
 export const discard = (path: string) => rm(path, { force: true }).catch(() => {})
+
+// --- recherche par description (un agent parcourt les images triees) ----------------------------------------------------------------------------
+
+export const FIND_LIMIT = 12
+export interface FindMatch { image: LibraryImage; why: string }
+export type FindState = { state: 'running' } | { state: 'failed'; error: string } | { state: 'done'; matches: FindMatch[] }
+
+/** Lance la recherche : un agent (Claude sur un Worker) cherche dans les images TRIEES de l'utilisateur celles qui correspondent a sa description. */
+export function startFind(db: Db, hub: WorkerHub, userId: number, rawQuery: unknown): number {
+  const query = cleanDescription(rawQuery).slice(0, 300)
+  if (query.length < 3) throw new LibraryError("Decris l'image que tu cherches (3 caracteres au moins).")
+  if (!db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'sorted' LIMIT 1").get(userId)) throw new LibraryError("Aucune image triee : la recherche ne porte que sur les images triees.", 409)
+  if (db.prepare("SELECT 1 FROM jobs WHERE user_id = ? AND kind = 'library.find' AND status IN ('queued', 'running') LIMIT 1").get(userId)) throw new LibraryError('Une recherche est deja en cours : attends son resultat.', 409)
+  return hub.enqueue(userId, 'library.find', { query, limit: FIND_LIMIT }, { requires: SORT_REQUIRES })
+}
+
+/** Etat d'une recherche. Les resultats sont REVALIDES : seules des images triees de cet utilisateur sont montrees, sans doublon, 12 au plus. */
+export function findResult(db: Db, userId: number, jobId: number): FindState | null {
+  const job = getJob(db, userId, jobId)
+  if (!job || job.kind !== 'library.find') return null
+  if (job.status === 'queued' || job.status === 'running') return { state: 'running' }
+  if (job.status !== 'succeeded') return { state: 'failed', error: job.status === 'cancelled' ? 'Recherche annulee.' : `La recherche a echoue : ${String(job.error ?? 'erreur inconnue').slice(0, 300)}` }
+  const raw = job.result && typeof job.result === 'object' ? (job.result as { matches?: unknown }).matches : undefined
+  const matches: FindMatch[] = []
+  const seen = new Set<string>()
+  for (const m of Array.isArray(raw) ? raw : []) {
+    if (!m || typeof m !== 'object') continue
+    const o = m as Record<string, unknown>
+    if (!isLibraryId(o.id) || seen.has(o.id)) continue
+    const image = getImage(db, userId, o.id)
+    if (!image || image.status !== 'sorted') continue
+    seen.add(o.id)
+    matches.push({ image, why: cleanDescription(o.why) })
+    if (matches.length >= FIND_LIMIT) break
+  }
+  return { state: 'done', matches }
+}

@@ -464,3 +464,14 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .lib-sort input[type=number] { width: 84px; }
 .lib-sort .small { flex-basis: 100%; }
+
+.lib-tabs.main a { font-size: 15px; font-weight: 600; }
+.lib-tabs .count { margin-left: 4px; padding: 1px 8px; font-size: 12px; font-weight: 500; color: var(--muted); background: var(--surface3); border-radius: 999px; }
+.lib-find { margin: 0 0 16px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line2); border-radius: 12px; }
+.lib-find h2 { margin: 0 0 4px; font-size: 15px; }
+.lib-find-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin: 10px 0; }
+.lib-find-form textarea { flex: 1 1 320px; min-width: 0; resize: vertical; }
+#lib-find-out { margin-top: 8px; }
+.lib-why { margin: 0; font-size: 13px; color: var(--accent); }
+.lib-sortbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 14px; }
+.lib-sortbar p { margin: 0; }

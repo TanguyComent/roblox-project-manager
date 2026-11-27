@@ -86,3 +86,59 @@ test('telechargement d une image : jeton en Authorization et adresse du Host', a
   await assert.rejects(downloadLibraryImage('http://h', 't', hex(5), (async () => new Response('', { status: 404 })) as unknown as typeof fetch), /404/)
   assert.ok(readdirSync(tmpdir()).length >= 0)
 })
+
+// --- library.find : recherche par description ------------------------------------------------------------------------------------------------------
+
+import { ToolServer } from '../src/tools.ts'
+
+const FAKE_FIND = join(import.meta.dirname, 'fake-claude-find.mjs')
+const entry = (n: number, title: string) => ({ id: hex(n), scope: 'icon', folder: 'icon', title, description: `Icone ${title}`, tags: [title], style: 'flat', traits: ['flat'], subject: title, colors: ['rouge'], width: 64, height: 64, ratio: 'carre', mime: 'image/png', size: PNG.length, sha256: sha(PNG), roblox_status: 'unpublished', roblox_asset_id: null })
+
+function runFind(payload: unknown, mode = 'ok', over: Partial<JobContext> = {}) {
+  const log = join(tmp(), 'find.jsonl')
+  process.env.FAKE_FIND_LOG = log
+  process.env.FAKE_FIND_MODE = mode
+  const queries: unknown[] = []
+  const server = new ToolServer()
+  const h = libraryHandlers({ claude: { cmd: process.execPath, args: [FAKE_FIND] }, toolServer: server })
+  const ctx: JobContext = {
+    jobId: 1, payload, signal: new AbortController().signal, event: () => {},
+    searchLibrary: async (q) => { queries.push(q); const id = (q as { id?: string }).id; return { images: [entry(1, 'epee'), entry(2, 'bouclier')].filter((e) => !id || e.id === id) } },
+    downloadLibraryImage: async () => PNG, ...over,
+  }
+  const calls = () => readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) as { args: string[]; cwd: string; prompt: string; settings: { permissions: { allow: string[]; deny: string[] } }; mcpKeys: string[]; toolNames: string[]; tools: { name: string; args: Record<string, unknown>; isError: boolean; images: number }[] }[]
+  return { result: h['library.find'](ctx) as Promise<{ matches: { id: string; why: string }[] }>, calls, queries }
+}
+
+test('recherche par description : l agent utilise library_search / library_get, droits minimaux, resultat borne', async () => {
+  const t = runFind({ query: 'une epee rouge', limit: 12 })
+  const r = await t.result
+  assert.deepEqual(r.matches.map((m) => m.id), [hex(1), hex(2)])
+  assert.match(r.matches[0].why, /Correspond a « une epee rouge »/)
+  const c = t.calls()[0]
+  assert.deepEqual(c.toolNames, ['library_search', 'library_get'], 'ni library_publish ni ui_preview')
+  assert.deepEqual(c.settings.permissions.allow, ['Write', 'mcp__rpm__library_search', 'mcp__rpm__library_get'])
+  assert.ok(c.settings.permissions.deny.includes('Bash') && c.settings.permissions.deny.includes('WebFetch'))
+  assert.deepEqual(c.mcpKeys, ['rpm'])
+  assert.ok(c.args.includes('--strict-mcp-config'))
+  assert.match(c.prompt, /« une epee rouge »/)
+  assert.match(c.prompt, /DONNEES/)
+  assert.deepEqual(c.tools.map((x) => [x.name, x.isError]), [['library_search', false], ['library_get', false]])
+  assert.equal(c.tools[1].images, 1, 'l agent VOIT l image')
+  assert.deepEqual(t.queries[0], { query: 'une epee rouge', scope: '', style: '', subject: '', color: '', ratio: '' })
+  assert.equal(existsSync(c.cwd), false, 'dossier temporaire supprime')
+})
+
+test('recherche par description : resultats hostiles ecartes (inconnus tels quels pour le Host, doublons, chemins, trop nombreux), echecs clairs', async () => {
+  const r = await runFind({ query: 'epee', limit: 5 }, 'odd').result
+  assert.equal(r.matches.length, 5, 'borne par limit')
+  assert.ok(r.matches.every((m) => /^[0-9a-f]{32}$/.test(m.id)))
+  assert.equal(new Set(r.matches.map((m) => m.id)).size, r.matches.length, 'sans doublon')
+  assert.ok(r.matches.every((m) => m.why.length <= 160))
+  const rejects = (p: Promise<unknown>, re: RegExp) => assert.rejects(p, (e: Error) => { assert.match(e.message, re); return true })
+  await rejects(runFind({ query: 'epee' }, 'none').result, /result\.json manquant/)
+  await rejects(runFind({ query: 'epee' }, 'bad').result, /illisible/)
+  await rejects(runFind({ query: 'epee' }, 'crash').result, /code 2/)
+  await rejects(runFind({ query: 'a' }).result, /Decris l'image/)
+  await rejects(runFind({ query: 'epee' }, 'ok', { searchLibrary: undefined }).result, /ne sait pas chercher/)
+})
