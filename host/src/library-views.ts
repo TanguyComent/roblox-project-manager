@@ -196,3 +196,43 @@ export function findResultsHtml(matches: { image: LibraryImage; why: string }[])
   </div>
 </article>`).join('')}</div>`
 }
+
+const day = (t: number | null) => (t ? new Date(t).toLocaleDateString('fr-FR') : '')
+
+/** Contenu de la modale d'une image : apercu, toutes les informations, et l'envoi sur Roblox si elle n'y est pas encore. */
+export function libraryInfoHtml(img: LibraryImage, csrf: string, targets: TargetOption[]): string {
+  const ratio = ratioKind(img.width, img.height)
+  const row = (label: string, value: string) => (value ? `<dt>${label}</dt><dd>${value}</dd>` : '')
+  const list = (csv: string, cls = 'tag') => (csv ? `<div class="tags">${chips(csv, cls)}</div>` : '')
+  const sorted = img.status === 'sorted'
+  let roblox: string
+  if (img.roblox_status === 'published' && img.roblox_asset_id) {
+    const ref = `rbxassetid://${img.roblox_asset_id}`
+    roblox = `<div class="rbx ok"><strong>Publiee sur Roblox</strong><div><code>${esc(ref)}</code> <button type="button" class="ghost" data-copy="${esc(ref)}">Copier</button></div><p class="muted small">${[img.roblox_owner ? `proprietaire : ${esc(img.roblox_owner)}` : '', img.published_by ? `par ${esc(img.published_by)}` : '', day(img.published_at)].filter(Boolean).join(' · ')}</p></div>`
+  } else if (img.roblox_status === 'publishing') {
+    roblox = '<div class="rbx wait">Publication en cours : Roblox examine l\'image (moderation). Reouvre cette fenetre dans un instant.</div>'
+  } else if (!sorted) {
+    roblox = '<div class="rbx"><p class="muted small">L\'image doit d\'abord etre triee pour pouvoir etre envoyee sur Roblox.</p></div>'
+  } else if (!FORMATS[img.mime]) {
+    roblox = '<div class="rbx"><p class="muted small">Roblox n\'accepte que les images PNG et JPEG : cette image ne peut pas etre envoyee.</p></div>'
+  } else if (!targets.length) {
+    roblox = '<div class="rbx"><p class="muted small">Pour envoyer l\'image sur Roblox, lie d\'abord un compte Roblox a un projet (<a href="/account">page Compte</a>).</p></div>'
+  } else {
+    roblox = `<div class="rbx">${img.roblox_status === 'failed' && img.roblox_error ? `<p class="alert error small">${esc(img.roblox_error)}</p>` : ''}<form method="post" action="/library/${img.id}/publish" class="rbx-form modal-publish">${csrfField(csrf)}<label class="small">Publier sur <select name="target">${targets.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}</select></label><button type="submit" class="primary">Uploader sur Roblox</button></form><p class="muted small">L'image est envoyee a Roblox, qui la verifie avant de la rendre utilisable.</p></div>`
+  }
+  return `<div class="info">
+  <a class="info-img" href="/library/${img.id}/file" target="_blank" rel="noopener" title="Ouvrir en taille reelle"><img src="/library/${img.id}/file" alt="${esc(img.description || img.file_name)}" decoding="async"></a>
+  <div class="info-body">
+    <h2 id="lib-modal-title">${esc(sorted ? img.title : img.file_name)}</h2>
+    ${img.status === 'pending' ? '<p class="muted small">En attente de tri.</p>' : img.status === 'sorting' ? '<p class="muted small">Tri en cours…</p>' : ''}
+    ${img.description ? `<p class="lib-desc">${esc(img.description)}</p>` : ''}
+    <dl class="info-list">
+      ${row('Scope', esc(img.scope))}${row('Style', esc(img.style))}${row('Traits du style', list(img.traits))}${row('Sujet', esc(img.subject))}${row('Couleurs', list(img.colors, 'tag color'))}${row('Mots-cles', list(img.tags))}
+      ${row('Dimensions', img.width ? `${img.width} × ${img.height} px${ratio ? ` (${ratio})` : ''}` : '')}${row('Format', `${esc(img.mime.replace('image/', '').toUpperCase())} · ${fmtSize(img.size)}`)}
+      ${row('Fichier', esc(img.file_name))}${row('Provenance', esc(img.origin))}${row('Dossier d\'origine', esc(img.hint))}${row('Source', img.source === 'generated' ? 'generee par une IA' : 'ajoutee par toi')}
+      ${row('Ajoutee le', day(img.created_at))}${row('Triee le', day(img.sorted_at))}
+    </dl>
+    ${roblox}
+  </div>
+</div>`
+}

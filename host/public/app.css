@@ -475,3 +475,18 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-why { margin: 0; font-size: 13px; color: var(--accent); }
 .lib-sortbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 14px; }
 .lib-sortbar p { margin: 0; }
+
+#lib-modal { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--line2); border-radius: 16px; overflow: auto; }
+#lib-modal::backdrop { background: rgba(5, 7, 12, .72); }
+#lib-modal .modal-close { position: sticky; top: 8px; float: right; z-index: 2; width: 34px; min-height: 34px; margin: 8px 8px 0 0; padding: 0; font-size: 22px; line-height: 1; border-radius: 50%; }
+#lib-modal .modal-content { padding: 20px 22px 22px; }
+.info { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 20px; align-items: start; }
+.info-img { display: grid; place-items: center; min-height: 220px; background: repeating-conic-gradient(var(--surface3) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; }
+.info-img img { max-width: 100%; max-height: 60vh; object-fit: contain; }
+.info-body h2 { margin: 0 0 6px; font-size: 18px; overflow-wrap: anywhere; }
+.info-list { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0; font-size: 13px; }
+.info-list dt { color: var(--muted); }
+.info-list dd { margin: 0; overflow-wrap: anywhere; }
+.info .rbx { margin-top: 14px; padding: 12px; background: var(--surface3); border-radius: 10px; }
+.info .rbx-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+@media (max-width: 720px) { .info { grid-template-columns: 1fr; } }

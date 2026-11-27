@@ -11,7 +11,7 @@ import type { Env } from './app.ts'
 import {
   LibraryError, addImage, addZip, findResult, startFind, cancelSortJobs, discard, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
 } from './library.ts'
-import { findResultsHtml, groupOf, libraryGridHtml, libraryPage, viewOf, type View } from './library-views.ts'
+import { findResultsHtml, groupOf, libraryGridHtml, libraryInfoHtml, libraryPage, viewOf, type View } from './library-views.ts'
 import type { Db } from './db.ts'
 import type { WorkerHub } from './worker-hub.ts'
 import { autoPublishOf, publishImages, publishTargets, resolveTarget, setAutoPublish, syncPublishing } from './library-publish.ts'
@@ -100,6 +100,16 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     } finally { await discard(tmp) }
   })
 
+  // Fenetre d'une image : toutes ses informations et, si elle n'est pas sur Roblox, le bouton pour l'y envoyer.
+  app.get('/library/:id{[0-9a-f]{32}}/info', (c) => {
+    const a = requireFull(c)
+    if (a instanceof Response) return a
+    const img = getImage(db, a.user.id, c.req.param('id'))
+    if (!img) return c.json({ error: 'Image introuvable.' }, 404)
+    c.header('Cache-Control', 'no-store')
+    return c.json({ html: libraryInfoHtml(img, a.session.csrf, publishTargets(db, a.user.id)) })
+  })
+
   // Le fichier : proprietaire seulement, image verifiee affichee en ligne, sans pouvoir executer quoi que ce soit.
   app.get('/library/:id{[0-9a-f]{32}}/file', (c) => {
     const a = requireFull(c)
@@ -176,7 +186,8 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     if ('res' in p) return p.res
     const target = resolveTarget(db, p.a.user.id, p.f.s('target'))
     if ('error' in target) return fail(c, p.a, new LibraryError(target.error))
-    await publishImages(db, roblox, p.a.user.id, [c.req.param('id')], target, 'manuel').catch(() => [])
+    const results = await publishImages(db, roblox, p.a.user.id, [c.req.param('id')], target, 'manuel').catch((e: unknown) => [{ id: c.req.param('id'), status: 'failed' as const, reference: null, error: e instanceof Error ? e.message : 'Envoi impossible.' }])
+    if (wantsJson(c)) return c.json(results[0] ?? { status: 'failed', error: 'Envoi impossible.' })
     return back(c, p.f.s('view'))
   })
 

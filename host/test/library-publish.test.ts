@@ -36,8 +36,8 @@ function fakeAssets(script: (op: string, n: number) => AssetOperation | Error = 
   }
 }
 
-async function setup(opts: { scopes?: unknown[]; group?: boolean } = {}) {
-  const c = client()
+async function setup(opts: { scopes?: unknown[]; group?: boolean; roblox?: unknown } = {}) {
+  const c = client(opts.roblox ? { roblox: opts.roblox as never } : {})
   await registerAndEnable(c)
   const csrf = csrfOf((await c.call('GET', '/projects')).text)
   const userId = (c.db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get() as { id: number }).id
@@ -335,4 +335,72 @@ test('vues de la page : triees / en attente, formulaires qui reviennent a la bon
   const empty = await setup()
   await empty.add('w.png', { status: 'pending' })
   assert.match((await empty.c.call('GET', '/library')).text, /data-view="pending"/)
+})
+
+// --- fenetre d'une image ----------------------------------------------------------------------------------------------------------------------
+
+test('fenetre d une image : informations, etats Roblox, bouton d envoi, echappement, proprietaire seulement', async () => {
+  const t = await setup()
+  const info = async (id: string) => (JSON.parse((await t.c.call('GET', `/library/${id}/info`, undefined, { accept: 'application/json' })).text) as { html: string }).html
+  const id = await t.add('epee.png')
+  t.c.db.prepare("UPDATE library_images SET scope = 'icon', style = 'cartoon-a', traits = 'cartoon,saturee', subject = 'epee', colors = 'rouge,or', tags = 'epee,sword', origin = 'Pack <b>X</b>', hint = 'Armes/epees', width = 128, height = 64, description = 'Une <i>epee</i>' WHERE id = ?").run(id)
+  const h = await info(id)
+  for (const re of [/<h2 id="lib-modal-title">epee<\/h2>/, /Scope<\/dt><dd>icon/, /cartoon-a/, /Traits du style/, /Sujet<\/dt><dd>epee/, /128 × 64 px \(large\)/, /PNG · /, /Provenance<\/dt><dd>Pack &lt;b&gt;X&lt;\/b&gt;/, /Armes\/epees/, /ajoutee par toi/, /Ajoutee le/]) assert.match(h, re)
+  assert.doesNotMatch(h, /<b>X<\/b>|<i>epee<\/i>/, 'rien n est injecte')
+  assert.match(h, /Uploader sur Roblox/)
+  assert.match(h, new RegExp(`action="/library/${id}/publish" class="rbx-form modal-publish"`))
+  assert.match(h, /name="target"/)
+  // publiee : identifiant copiable, plus de bouton d'envoi
+  t.c.db.prepare("UPDATE library_images SET roblox_status = 'published', roblox_asset_id = '4242', roblox_owner = 'group:99', published_by = 'chat 3', published_at = 1700000000000 WHERE id = ?").run(id)
+  const pub = await info(id)
+  assert.match(pub, /Publiee sur Roblox/)
+  assert.match(pub, /data-copy="rbxassetid:\/\/4242"/)
+  assert.match(pub, /proprietaire : group:99/)
+  assert.doesNotMatch(pub, /Uploader sur Roblox/)
+  // en cours, en echec, format refuse, image en attente
+  t.c.db.prepare("UPDATE library_images SET roblox_status = 'publishing' WHERE id = ?").run(id)
+  assert.match(await info(id), /Roblox examine/)
+  t.c.db.prepare("UPDATE library_images SET roblox_status = 'failed', roblox_error = 'Image refusee <script>' WHERE id = ?").run(id)
+  const failed = await info(id)
+  assert.match(failed, /Image refusee &lt;script&gt;/)
+  assert.match(failed, /Uploader sur Roblox/, 'on peut reessayer')
+  t.c.db.prepare("UPDATE library_images SET mime = 'image/webp' WHERE id = ?").run(id)
+  assert.match(await info(id), /PNG et JPEG/)
+  const wait = await t.add('w.png', { status: 'pending' })
+  const pend = await info(wait)
+  assert.match(pend, /En attente de tri/)
+  assert.match(pend, /doit d'abord etre triee/)
+  assert.doesNotMatch(pend, /Uploader sur Roblox/)
+  // sans projet ni compte lie : message d'explication
+  t.c.db.prepare('DELETE FROM projects').run()
+  t.c.db.prepare('DELETE FROM roblox_accounts').run()
+  const other = await t.add('o.png')
+  assert.match(await info(other), /lie d'abord un compte Roblox/)
+  // acces : session obligatoire, image inconnue ou d'un autre
+  assert.equal((await t.c.app.request(`${ORIGIN}/library/${id}/info`)).status, 302)
+  assert.equal((await t.c.call('GET', `/library/${'0'.repeat(32)}/info`, undefined, { accept: 'application/json' })).res.status, 404)
+  // la page charge le script de la fenetre et les miniatures sont des liens vers le fichier (repli sans JavaScript)
+  assert.match((await t.c.call('GET', '/library')).text, new RegExp(`class="lib-thumb" href="/library/${other}/file"`))
+})
+
+test('envoi depuis la fenetre : reponse JSON (publiee, erreur) sans rechargement', async () => {
+  const roblox = fakeAssets()
+  const t = await setup({ roblox })
+  const id = await t.add('epee.png')
+  const post = (body: Record<string, string>) => t.c.call('POST', `/library/${id}/publish`, { csrf: t.csrf, ...body }, { accept: 'application/json' })
+  const bad = await post({ target: 'nimporte' })
+  assert.equal(bad.res.status, 400)
+  assert.match(JSON.parse(bad.text).error, /Choisis ou publier/)
+  assert.equal((await post({ target: `project:${t.project.id}`, csrf: 'faux' })).res.status, 403)
+  const ok = await post({ target: `project:${t.project.id}` })
+  assert.equal(ok.res.status, 200)
+  const body = JSON.parse(ok.text) as { status: string; reference: string | null }
+  assert.deepEqual([body.status, body.reference], ['published', 'rbxassetid://777'])
+  assert.equal(roblox.uploads.length, 1)
+  const img = getImage(t.c.db, t.userId, id)!
+  assert.deepEqual([img.roblox_status, img.published_by], ['published', 'manuel'])
+  // sans JSON : redirection vers la vue d'origine
+  const id2 = await t.add('autre.png')
+  const form = await t.c.call('POST', `/library/${id2}/publish`, { csrf: t.csrf, target: `project:${t.project.id}`, view: 'sorted' })
+  assert.equal(form.res.status, 303)
 })
