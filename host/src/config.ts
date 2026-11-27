@@ -21,6 +21,12 @@ export const config = {
     maxMessage: Number(env.ATTACH_MAX_MESSAGE_MB ?? 50) * 1048576,
     userQuota: Number(env.ATTACH_USER_QUOTA_MB ?? 1024) * 1048576,
   },
+  // Bibliotheque d'images (voir library.ts).
+  library: {
+    maxFile: Number(env.LIBRARY_MAX_FILE_MB ?? 10) * 1048576,
+    maxImages: Number(env.LIBRARY_MAX_IMAGES ?? 2000),
+    userQuota: Number(env.LIBRARY_QUOTA_MB ?? 500) * 1048576,
+  },
   get secureCookies() { return this.publicUrl.startsWith('https://') },
 }
 

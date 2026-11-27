@@ -141,12 +141,13 @@ export interface Viewer { email: string; csrf: string }
 const NAV_ICONS = {
   projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   workers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>',
+  library: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-8 8"/></svg>',
   account: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.6 3.6-5.4 7-5.4s6.2 1.8 7 5.4"/></svg>',
 }
 
 // Page d'une session complete : coque d'application (barre laterale : Projets, Workers, Compte, deconnexion) + contenu.
 // `full` : le contenu occupe toute la hauteur de l'ecran, sans marges (interface de chat).
-export function appPage(title: string, v: Viewer, active: 'projects' | 'workers' | 'account', body: string,
+export function appPage(title: string, v: Viewer, active: 'projects' | 'workers' | 'library' | 'account', body: string,
   opts: { refreshSeconds?: number; refreshUrl?: string; full?: boolean; scripts?: string[] } = {}) {
   const link = (href: string, label: string, key: keyof typeof NAV_ICONS) =>
     `<a href="${href}"${active === key ? ' class="active" aria-current="page"' : ''}>${NAV_ICONS[key]}<span>${label}</span></a>`
@@ -154,7 +155,7 @@ export function appPage(title: string, v: Viewer, active: 'projects' | 'workers'
 <div class="app">
   <aside class="rail">
     <a class="rail-brand" href="/">${LOGO}<span>${esc(config.appName)}</span></a>
-    <nav class="rail-nav">${link('/projects', 'Projets', 'projects')}${link('/workers', 'Workers', 'workers')}${link('/account', 'Compte', 'account')}</nav>
+    <nav class="rail-nav">${link('/projects', 'Projets', 'projects')}${link('/workers', 'Workers', 'workers')}${link('/library', 'Bibliotheque', 'library')}${link('/account', 'Compte', 'account')}</nav>
     <div class="rail-foot">
       <span class="who">${esc(v.email)}</span>
       <form method="post" action="/logout">${csrfField(v.csrf)}<button class="ghost" type="submit">Se deconnecter</button></form>

@@ -9,6 +9,8 @@ export interface JobContext {
   /** Depose un paquet d'apercu (dossier) sur le Host, rattache a cette tache ; sans dossier, ne depose que les metadonnees. Renvoie l'identifiant de l'apercu. */
   /** Telecharge un fichier joint par l'utilisateur (cite par cette tache) depuis le Host. */
   downloadAttachment?(id: string): Promise<Buffer>
+  /** Telecharge une image de la bibliotheque de l'utilisateur (citee par cette tache de tri) depuis le Host. */
+  downloadLibraryImage?(id: string): Promise<Buffer>
   uploadPreview?(dir: string | null, meta: import('./preview.ts').PreviewMeta): Promise<string>
 }
 export type JobHandler = (ctx: JobContext) => Promise<unknown>

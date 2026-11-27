@@ -1,6 +1,7 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
 import { DEFAULT_ENV_PATH, readConfig, readWorkspace, workspaceProblem, writeConfig, writeWorkspace } from './config.ts'
 import { aiHandlers } from './ai.ts'
+import { libraryHandlers } from './library.ts'
 import { createGit, type RegistryView, type SweepResult } from './git.ts'
 import { detectCapabilities } from './capabilities.ts'
 import { readPairingInput, type Capability } from './protocol.ts'
@@ -69,7 +70,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     workerName = null
     const gen = ++generation
     current = launch({
-      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: { ...gitInstance.handlers, ...aiInstance },
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: { ...gitInstance.handlers, ...aiInstance, ...libraryHandlers({ claude: o.ai?.claude, timeoutMs: o.ai?.timeoutMs }) },
       onState: (s, d) => {
         if (gen !== generation) return // evenement d'une ancienne connexion
         state = s

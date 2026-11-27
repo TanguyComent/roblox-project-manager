@@ -122,7 +122,7 @@ function killTree(pid: number | undefined) {
   else { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* deja termine */ } } }
 }
 
-function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx: Pick<JobContext, 'signal'>, timeoutMs: number, onLine?: (obj: unknown) => void): Promise<string> {
+export function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx: Pick<JobContext, 'signal'>, timeoutMs: number, onLine?: (obj: unknown) => void): Promise<string> {
   return new Promise((resolve, reject) => {
     // Sous Windows, `claude` est souvent un script .cmd (npm) : il faut un shell. Les arguments sont des constantes ou des valeurs validees ; le prompt passe par stdin.
     const viaShell = process.platform === 'win32' && cmd === 'claude'
