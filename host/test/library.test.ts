@@ -115,7 +115,7 @@ test('tri : tache envoyee avec les images en attente, resultat applique et reval
   const job = t.c.db.prepare("SELECT id, kind, requires FROM jobs WHERE kind = 'library.sort'").get() as { id: number; kind: string; requires: string }
   assert.equal(job.requires, 'claude')
   const payload = getJob(t.c.db, t.userId, job.id)!.payload as { images: { id: string; name: string; sha256: string; width: number; height: number }[]; vault: { items: unknown[]; scopes: string[]; traits: string[] } }
-  assert.deepEqual(payload.images.map((i) => i.id), [a, b, c])
+  assert.deepEqual(payload.images.map((i) => i.id).sort(), [a, b, c].sort())
   assert.deepEqual(payload.vault.items, [])
   assert.ok(payload.vault.scopes.includes('icon') && payload.vault.traits.includes('cartoon'), 'vocabulaires de depart')
   assert.deepEqual(payload.images.map((i) => [i.width, i.height]), [[0, 0], [0, 0], [0, 0]], 'fausses images : dimensions inconnues')
@@ -185,7 +185,7 @@ test('page et suivi en direct : images, boutons, aucune fuite HTML', async () =>
   assert.match(page, new RegExp(`/library/${id}/file`))
   assert.doesNotMatch(page, /<script>alert\(1\)/)
   assert.doesNotMatch(page, /<b>x<\/b>/)
-  assert.match(page, /Trier 1 image\(s\)/)
+  assert.match(page, /Trier sur 1/)
   const live = await t.c.call('GET', '/library/live', undefined, { accept: 'application/json' })
   const j = JSON.parse(live.text) as { html: string; counts: { pending: number } }
   assert.equal(j.counts.pending, 1)

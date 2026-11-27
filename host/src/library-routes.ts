@@ -132,7 +132,15 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   app.post('/library/sort', async (c) => {
     const p = await post(c)
     if ('res' in p) return p.res
-    try { startSort(db, hub, p.a.user.id, true) } catch (e) { return fail(c, p.a, e) }
+    // « count » : combien d'images trier dans cette serie ; vide = toutes celles en attente
+    const raw = p.f.s('count').trim()
+    let count: number | undefined
+    if (raw !== '') {
+      count = Number(raw)
+      if (!Number.isInteger(count) || count < 1) return fail(c, p.a, new LibraryError('Indique un nombre d\'images a trier (1 au moins).'))
+      count = Math.min(count, imageCounts(db, p.a.user.id).pending)
+    }
+    try { startSort(db, hub, p.a.user.id, true, count) } catch (e) { return fail(c, p.a, e) }
     return wantsJson(c) ? c.json({ ok: true }) : back(c)
   })
 

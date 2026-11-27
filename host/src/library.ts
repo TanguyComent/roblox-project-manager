@@ -265,13 +265,16 @@ function vaultSummary(db: Db, userId: number) {
 }
 
 /** Envoie les images en attente (40 au plus par tache) a un agent. */
-export function startSort(db: Db, hub: WorkerHub, userId: number, chain = false): { jobId: number; count: number } {
+/** `want` : nombre TOTAL d'images a trier dans cette serie (absent : toutes celles en attente). Chaque tache en traite 40 au plus. */
+export function startSort(db: Db, hub: WorkerHub, userId: number, chain = false, want?: number): { jobId: number; count: number } {
+  if (want !== undefined && (!Number.isInteger(want) || want < 1)) throw new LibraryError('Indique un nombre d\'images a trier (1 au moins).')
   if (db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'sorting'").get(userId)) throw new LibraryError('Un tri est deja en cours.', 409)
-  const pending = db.prepare("SELECT id, file_name, mime, size, sha256, width, height, origin, hint FROM library_images WHERE user_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT ?").all(userId, SORT_BATCH) as unknown as { id: string; file_name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string; hint: string }[]
+  const pending = db.prepare("SELECT id, file_name, mime, size, sha256, width, height, origin, hint FROM library_images WHERE user_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT ?").all(userId, Math.min(SORT_BATCH, want ?? SORT_BATCH)) as unknown as { id: string; file_name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string; hint: string }[]
   if (!pending.length) throw new LibraryError('Aucune image en attente.', 409)
   const jobId = hub.enqueue(userId, 'library.sort', {
     images: pending.map((p) => ({ id: p.id, name: p.file_name, mime: p.mime, size: p.size, sha256: p.sha256, width: p.width, height: p.height, origin: p.origin, hint: p.hint })),
     chain,
+    ...(want !== undefined ? { want } : {}),
     vault: vaultSummary(db, userId),
   }, { requires: SORT_REQUIRES })
   db.prepare(`UPDATE library_images SET status = 'sorting', sort_job_id = ? WHERE id IN (${pending.map(() => '?').join(',')})`).run(jobId, ...pending.map((p) => p.id))
@@ -300,10 +303,12 @@ export function syncLibrary(db: Db, userId: number, hub?: WorkerHub): { error: s
     if (job.status === 'queued' || job.status === 'running') continue
     if (job.status === 'succeeded') {
       const sorted = applySort(db, userId, jobId, job.result)
-      // « Trier » traite TOUTES les images en attente, par lots : tant que le lot precedent a avance, on lance le suivant (un lot sans progres arrete la chaine)
-      const chain = !!job.payload && typeof job.payload === 'object' && (job.payload as { chain?: unknown }).chain === true
-      if (hub && chain && sorted > 0 && !sortingJobIds(db, userId).length && (db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'pending'").get(userId))) {
-        try { startSort(db, hub, userId, true) } catch { /* plus rien a trier */ }
+      // « Trier » traite les images en attente par lots : tant que le lot precedent a avance, on lance le suivant (un lot sans progres arrete la chaine).
+      // Si l'utilisateur a demande un nombre precis (`want`), la serie s'arrete une fois ce nombre atteint.
+      const pl = (job.payload && typeof job.payload === 'object' ? job.payload : {}) as { chain?: unknown; want?: unknown }
+      const left = typeof pl.want === 'number' ? pl.want - sorted : undefined
+      if (hub && pl.chain === true && sorted > 0 && (left === undefined || left > 0) && !sortingJobIds(db, userId).length && (db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'pending'").get(userId))) {
+        try { startSort(db, hub, userId, true, left) } catch { /* plus rien a trier */ }
       }
     }
     else { resetSorting(db, userId, jobId); error = job.status === 'cancelled' ? 'Tri annule.' : `Le tri a echoue : ${String(job.error ?? 'erreur inconnue').slice(0, 300)}` }

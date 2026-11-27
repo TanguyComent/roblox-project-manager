@@ -188,3 +188,37 @@ test('tri en chaine : un lot reussi lance le suivant tant qu\'il reste des image
   finishJob(t2.c.db, solo.jobId, 'succeeded', { sorted: [{ id: '0'.repeat(32), scope: 'icon', title: 'x', description: 'd' }] })
   assert.equal(applySort(t2.c.db, t2.userId, solo.jobId, getJob(t2.c.db, t2.userId, solo.jobId)!.result), 1)
 })
+
+test('tri d un nombre choisi : serie bornee, lots de 40 au plus, validation du nombre', async () => {
+  const t = await setup()
+  const ins = t.c.db.prepare("INSERT INTO library_images (id, user_id, file_name, title, mime, size, sha256, created_at) VALUES (?, ?, ?, ?, 'image/png', 10, ?, ?)")
+  for (let i = 0; i < 100; i++) ins.run(String(i).padStart(32, '0'), t.userId, `f${i}.png`, `f${i}`, String(i).padStart(64, '0'), i)
+  const post = (count: string) => t.c.call('POST', '/library/sort', { csrf: t.csrf, count }, { accept: 'application/json' })
+  assert.equal((await post('0')).res.status, 400)
+  assert.equal((await post('-3')).res.status, 400)
+  assert.equal((await post('abc')).res.status, 400)
+  assert.equal((await post('2.5')).res.status, 400)
+  assert.equal((await post('50')).res.status, 200)
+  const jobs = () => t.c.db.prepare("SELECT id FROM jobs WHERE kind = 'library.sort' ORDER BY id").all() as { id: number }[]
+  const payload = (id: number) => getJob(t.c.db, t.userId, id)!.payload as { images: { id: string }[]; want?: number; chain: boolean }
+  assert.equal(payload(jobs()[0].id).images.length, 40, 'un lot : 40 au plus')
+  assert.equal(payload(jobs()[0].id).want, 50)
+  const w = createWorker(t.c.db, t.userId, 'PC', null)
+  assert.ok(w.ok)
+  const finish = (id: number) => {
+    markJobRunning(t.c.db, id, w.id)
+    finishJob(t.c.db, id, 'succeeded', { sorted: payload(id).images.map((i) => ({ id: i.id, scope: 'icon', title: `t${i.id.slice(-3)}`, description: 'd' })) })
+    syncLibrary(t.c.db, t.userId, t.c.hub)
+  }
+  finish(jobs()[0].id)
+  assert.equal(jobs().length, 2)
+  assert.equal(payload(jobs()[1].id).images.length, 10, 'le second lot complete les 50 demandes')
+  assert.equal(payload(jobs()[1].id).want, 10)
+  finish(jobs()[1].id)
+  assert.equal(jobs().length, 2, 'la serie s arrete a 50 : il en reste 50 en attente')
+  assert.equal((t.c.db.prepare("SELECT COUNT(*) AS n FROM library_images WHERE status = 'pending'").get() as { n: number }).n, 50)
+  // nombre superieur a ce qui reste : borne ; vide : toutes
+  assert.equal((await post('9999')).res.status, 200)
+  assert.equal(payload(jobs()[2].id).want, 50)
+  assert.match((await t.c.call('GET', '/library')).text, /name="count"/)
+})

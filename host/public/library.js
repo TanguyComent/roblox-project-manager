@@ -75,6 +75,19 @@
   document.addEventListener('dragleave', (e) => { if (hasFiles(e) && --depth <= 0) { depth = 0; drop.hidden = true } })
   document.addEventListener('drop', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; drop.hidden = true; addFiles(e.dataTransfer.files) })
 
+  // --- estimation du cout du tri (lots de 40, environ 0,15 $ par lot) ---
+  const count = document.getElementById('lib-count')
+  const estimate = document.getElementById('lib-estimate')
+  if (count && estimate) {
+    const update = () => {
+      const n = Number.parseInt(count.value, 10) || Number.parseInt(count.max, 10) || 0
+      const lots = Math.ceil(Math.min(n, Number.parseInt(count.max, 10) || n) / 40)
+      estimate.textContent = lots ? `${lots} lot(s) de 40 au plus · environ ${(lots * 0.15).toFixed(2).replace('.', ',')} $` : ''
+    }
+    count.addEventListener('input', update)
+    update()
+  }
+
   // --- suivi du tri : on interroge le Host tant que des images sont « en cours de tri », puis on recharge la page ---
   if (root.dataset.sorting === 'true') {
     const poll = async () => {

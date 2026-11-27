@@ -461,3 +461,6 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-pages .gap { color: var(--muted); }
 .lib-pages > .muted { margin-right: auto; }
 .lib-count { margin: 18px 0 8px; }
+.lib-sort { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lib-sort input[type=number] { width: 84px; }
+.lib-sort .small { flex-basis: 100%; }

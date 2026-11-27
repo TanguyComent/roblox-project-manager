@@ -136,7 +136,7 @@ export function libraryPage(o: Viewer & LibraryPageData) {
     <div class="actions">
       <input type="file" id="lib-input" accept="image/png,image/jpeg,image/webp,image/gif,.zip,application/zip" multiple hidden>
       <button type="button" id="lib-add" title="Images, ou un pack complet en archive ZIP (tout ce qui n'est pas une image est ignore)">Ajouter des images ou un pack (.zip)</button>
-      <form method="post" action="/library/sort" id="lib-sort-form">${csrfField(o.csrf)}<button class="primary" type="submit" id="lib-sort"${o.counts.pending && !busy ? '' : ' disabled'}>Trier${o.counts.pending ? ` ${o.counts.pending} image(s)` : ''}</button></form>
+      <form method="post" action="/library/sort" id="lib-sort-form" class="lib-sort">${csrfField(o.csrf)}<label class="sr" for="lib-count">Nombre d'images a trier</label><input type="number" id="lib-count" name="count" min="1" max="${o.counts.pending}" value="${Math.min(o.counts.pending, 80) || ''}" inputmode="numeric"${o.counts.pending && !busy ? '' : ' disabled'} title="Nombre d'images a trier maintenant (laisse vide pour toutes)"><button class="primary" type="submit" id="lib-sort"${o.counts.pending && !busy ? '' : ' disabled'}>Trier${o.counts.pending ? ` sur ${o.counts.pending}` : ''}</button><span class="muted small" id="lib-estimate"></span></form>
       ${busy ? `<form method="post" action="/library/sort/cancel">${csrfField(o.csrf)}<button type="submit">Annuler le tri</button></form>` : ''}
     </div>
   </header>
