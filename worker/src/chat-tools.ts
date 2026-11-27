@@ -3,6 +3,7 @@
 //   project     lire le projet (copie en lecture seule) ou ouvrir la branche de travail pour le modifier.
 // Rien de tout cela n'existe au debut d'un chat : l'atelier (dossier libre) suffit pour discuter ou imaginer une interface ; le projet n'est clone que
 // si l'IA en a besoin, et la branche n'est creee que quand elle doit vraiment modifier le projet.
+import { join } from 'node:path'
 import type { Git } from './git.ts'
 import { JobCancelled, type JobContext } from './jobs.ts'
 import { VIEWPORTS, fileProblem, renderStory, type UiRoot } from './preview.ts'
@@ -58,7 +59,7 @@ export function chatTools(s: ChatToolsState): ToolDef[] {
       if (typeof viewport !== 'string' || !(VIEWPORTS as readonly string[]).includes(viewport)) return text(`Format inconnu (attendu : ${VIEWPORTS.join(', ')}).`, true)
       const dir = rootsOf(s)[root]
       if (!dir) return text(s.project ? "Le projet n'est pas encore disponible : appelle d'abord l'outil project (action « read » pour le lire, « open_branch » pour le modifier)." : "Ce chat n'a pas de projet : utilise root « sandbox ».", true)
-      const r = await renderStory({ emulatorDir: s.emulatorDir, project: dir, file, viewport, signal })
+      const r = await renderStory({ emulatorDir: s.emulatorDir, images: join(s.atelier, '_library'), project: dir, file, viewport, signal })
       if (signal.aborted) throw new JobCancelled()
       const notes = [
         `${r.nodes} element${r.nodes > 1 ? 's' : ''} affiche${r.nodes > 1 ? 's' : ''}`,

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createUser } from '../src/auth.ts'
 import { config } from '../src/config.ts'
-import { cleanDescription, cleanFolder, cleanTags, cleanTitle, getImage, listImages, syncLibrary } from '../src/library.ts'
+import { cleanDescription, cleanFolder, cleanTags, cleanTitle, getImage, listImages, searchImages, syncLibrary } from '../src/library.ts'
 import { createWorker, finishJob, getJob, markJobRunning } from '../src/workers.ts'
 import { ORIGIN, client, csrfOf, registerAndEnable } from './helpers.ts'
 
@@ -208,4 +208,56 @@ test('telechargement par un Worker : jeton, tache de tri en cours qui cite l ima
   assert.ok(w2.ok)
   t.c.db.prepare("UPDATE jobs SET worker_id = ? WHERE id = ?").run(w2.id, job.id)
   assert.equal((await get(a, w2.token)).status, 404, 'Worker d un autre utilisateur')
+})
+
+test('recherche : classement par nom / mots-cles / dossier / description, images triees seulement, id et dossier', async () => {
+  const t = await setup()
+  const sorted = async (name: string, f: Record<string, string>) => {
+    const id = await t.add(name)
+    t.c.db.prepare("UPDATE library_images SET status = 'sorted', folder = ?, title = ?, description = ?, tags = ? WHERE id = ?").run(f.folder, f.title, f.description, f.tags, id)
+    return id
+  }
+  const sword = await sorted('a.png', { folder: 'icons/armes', title: 'epee-acier', description: 'Icone d epee en acier', tags: 'epee,arme,acier' })
+  const shield = await sorted('b.png', { folder: 'icons/armes', title: 'bouclier', description: 'Un bouclier rond avec une epee gravee', tags: 'bouclier,defense' })
+  const bg = await sorted('c.png', { folder: 'backgrounds', title: 'foret', description: 'Foret sombre', tags: 'foret,nature' })
+  await t.add('en-attente.png') // pas triee : jamais renvoyee
+  const ids = (o: Parameters<typeof searchImages>[2]) => searchImages(t.c.db, t.userId, o).map((h) => h.id)
+  assert.deepEqual(ids({ query: 'epee' }), [sword, shield], 'le nom et les mots-cles priment sur la description')
+  assert.deepEqual(ids({ query: 'ÉPÉE arme' }), [sword, shield])
+  assert.deepEqual(ids({ query: 'dragon' }), [])
+  assert.deepEqual(ids({ query: '', folder: 'icons' }), [shield, sword], 'sans requete : tout le dossier')
+  assert.deepEqual(ids({ folder: 'backgrounds' }), [bg])
+  assert.deepEqual(ids({ id: bg }), [bg])
+  assert.equal(searchImages(t.c.db, t.userId, {}).length, 3)
+  assert.equal(searchImages(t.c.db, t.userId, { limit: 2 }).length, 2)
+  assert.deepEqual(searchImages(t.c.db, t.userId + 1, { query: 'epee' }), [], 'jamais les images d un autre')
+})
+
+test('routes Worker de la bibliotheque pour un chat : recherche et telechargement, chat en cours obligatoire, meme utilisateur', async () => {
+  const t = await setup()
+  const id = await t.add('a.png')
+  const pending = await t.add('b.png')
+  t.c.db.prepare("UPDATE library_images SET status = 'sorted', folder = 'icons', title = 'icone', description = 'Une icone', tags = 'icone' WHERE id = ?").run(id)
+  const w = createWorkerFor(t)
+  const call = (path: string, token = w.token) => t.c.app.request(`${ORIGIN}${path}`, { headers: { authorization: `Bearer ${token}` } })
+  assert.equal((await call('/api/worker/library-search?q=icone')).status, 403, 'aucun chat en cours')
+  assert.equal((await call(`/api/worker/library/${id}`)).status, 404)
+  const job = t.c.hub.enqueue(t.userId, 'ai.chat', {}, { requires: [] })
+  markJobRunning(t.c.db, job, w.id)
+  const r = await call('/api/worker/library-search?q=icone')
+  assert.equal(r.status, 200)
+  const j = (await r.json()) as { images: { id: string; title: string }[] }
+  assert.deepEqual(j.images.map((i) => i.id), [id])
+  assert.deepEqual(((await (await call(`/api/worker/library-search?id=${pending}`)).json()) as { images: unknown[] }).images, [], 'image en attente : invisible')
+  assert.equal((await call(`/api/worker/library/${id}`)).status, 200)
+  assert.equal((await call(`/api/worker/library/${pending}`)).status, 404, 'image non triee')
+  assert.equal((await call('/api/worker/library-search?q=icone', 'rpmw_' + 'x'.repeat(43))).status, 403)
+  assert.equal((await t.c.app.request(`${ORIGIN}/api/worker/library-search`)).status, 403)
+
+  const other = await createUser(t.c.db, 'autre2@example.com', 'correct horse battery')
+  const w2 = createWorker(t.c.db, other.id, 'PC9', null)
+  assert.ok(w2.ok)
+  markJobRunning(t.c.db, t.c.hub.enqueue(other.id, 'ai.chat', {}, { requires: [] }), w2.id)
+  assert.equal((await call(`/api/worker/library/${id}`, w2.token)).status, 404, 'image d un autre utilisateur')
+  assert.deepEqual(((await (await call('/api/worker/library-search?q=icone', w2.token)).json()) as { images: unknown[] }).images, [])
 })

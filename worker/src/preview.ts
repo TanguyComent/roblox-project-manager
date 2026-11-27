@@ -78,6 +78,8 @@ export interface BuildOptions {
   /** Dossier du depot de maquette de ce chat, s'il y en a un (blocs `root: "sandbox"`). */
   sandbox?: string
   emulatorDir?: string
+  /** Dossier des images de la bibliotheque recuperees par l'IA (`_library/`, avec index.json) : affichees dans les apercus au lieu de blocs hachures. */
+  images?: string
   /** Envoie un paquet (dossier) au Host ; renvoie l'identifiant de l'apercu. Sans dossier : ne depose que les metadonnees (apercu en echec). */
   upload: (dir: string | null, meta: PreviewMeta) => Promise<string>
   signal: AbortSignal
@@ -127,7 +129,7 @@ export async function buildPreviews(text: string, o: BuildOptions): Promise<Prev
     o.event('info', `Apercu : ${b.file}${b.root === 'sandbox' ? ' (maquette)' : ''}`)
     const out = mkdtempSync(join(tmpdir(), 'rpm-prev-'))
     try {
-      const r = await runTool(emulatorDir, ['--project', projectDir, '--file', b.file, '--out', join(out, 'bundle'), '--viewport', b.viewport], o.signal)
+      const r = await runTool(emulatorDir, ['--project', projectDir, '--file', b.file, '--out', join(out, 'bundle'), '--viewport', b.viewport, ...(o.images ? ['--images', o.images] : [])], o.signal)
       if (o.signal.aborted) break
       if (!r.ok) {
         const m = meta(b, r.error ?? 'construction impossible')
@@ -151,7 +153,7 @@ export interface RenderResult { ok: boolean; error?: string; png?: Buffer; nodes
  * « Photo » d'une story : la construit, la rend dans un navigateur sans fenetre et renvoie la capture (PNG) avec les erreurs et modules manquants.
  * C'est ce que l'outil `ui_preview` donne a l'IA pour VOIR ce qu'elle construit (voir mcp-ui.ts).
  */
-export async function renderStory(o: { emulatorDir?: string; project: string; file: string; viewport?: string; signal: AbortSignal }): Promise<RenderResult> {
+export async function renderStory(o: { emulatorDir?: string; images?: string; project: string; file: string; viewport?: string; signal: AbortSignal }): Promise<RenderResult> {
   const emulatorDir = o.emulatorDir ?? DEFAULT_EMULATOR_DIR
   const fail = (error: string): RenderResult => ({ ok: false, error, nodes: 0, errors: [], missing: [] })
   const problem = fileProblem(o.file)
@@ -159,7 +161,7 @@ export async function renderStory(o: { emulatorDir?: string; project: string; fi
   if (!existsSync(join(emulatorDir, 'tools', 'preview.mjs'))) return fail("l'emulateur d'UI n'est pas installe sur ce Worker (dossier ui-emulator)")
   const out = mkdtempSync(join(tmpdir(), 'rpm-shot-'))
   try {
-    const r = await runTool(emulatorDir, ['--project', o.project, '--file', o.file, '--out', join(out, 'bundle'), '--viewport', o.viewport ?? 'UI Labs'], o.signal)
+    const r = await runTool(emulatorDir, ['--project', o.project, '--file', o.file, '--out', join(out, 'bundle'), '--viewport', o.viewport ?? 'UI Labs', ...(o.images ? ['--images', o.images] : [])], o.signal)
     if (!r.ok) return fail(r.error ?? 'construction impossible')
     const png = join(out, 'bundle', 'thumb.png')
     if (!r.checked || !existsSync(png)) return { ...fail('aucun navigateur (Edge ou Chrome) sur ce Worker : impossible de prendre une capture'), nodes: r.nodes ?? 0, errors: r.errors ?? [], missing: r.missing ?? [] }

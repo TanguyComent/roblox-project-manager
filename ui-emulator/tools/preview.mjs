@@ -43,6 +43,7 @@ if (!tsconfig) fail('aucun tsconfig.json trouve au-dessus de la story')
 const dir = posix(path.relative(project, path.dirname(abs))) || '.'
 const name = path.basename(abs).replace(/\.story\.tsx?$/, '')
 const viewport = opt('viewport', 'UI Labs')
+const imagesDir = opt('images') && path.resolve(opt('images'))
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rpm-preview-'))
 const cleanup = () => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* deja supprime */ } }
 process.on('exit', cleanup)
@@ -68,6 +69,27 @@ if (!fs.existsSync(vite)) fail("dependances de l'emulateur absentes : lance « n
 fs.rmSync(out, { recursive: true, force: true })
 const built = await run(process.execPath, [vite, 'build'], { RBX_PROFILE_FILE: profileFile, RBX_ONLY: name, RBX_BASE: './', RBX_OUT: out, RBX_PROFILE: '' }, 180_000)
 if (built.code !== 0 || !fs.existsSync(path.join(out, 'index.html'))) fail(`construction impossible : ${built.output.trim().split(/\r?\n/).slice(-6).join(' | ').slice(0, 800)}`)
+// 1 bis. images de la bibliotheque de l'utilisateur : <dossier>/index.json lie des references (rbxlib://..., rbxassetid://...) a des fichiers du dossier.
+// Elles sont copiees dans le paquet (lib/) et declarees a l'emulateur par un script (rpm-images.js) charge avant l'application.
+if (imagesDir && fs.existsSync(path.join(imagesDir, 'index.json'))) {
+  try {
+    const index = JSON.parse(fs.readFileSync(path.join(imagesDir, 'index.json'), 'utf8'))
+    const map = {}
+    fs.mkdirSync(path.join(out, 'lib'), { recursive: true })
+    for (const [key, file] of Object.entries(index)) {
+      if (typeof file !== 'string' || !/^[A-Za-z0-9][\w.-]{0,100}\.(png|jpe?g|webp|gif)$/i.test(file) || !/^rbx(lib|assetid):\/\/[\w-]{1,64}$/.test(key)) continue
+      const src = path.join(imagesDir, file)
+      if (!fs.existsSync(src) || !fs.statSync(src).isFile()) continue
+      fs.copyFileSync(src, path.join(out, 'lib', file))
+      map[key] = `lib/${file}`
+    }
+    if (Object.keys(map).length) {
+      fs.writeFileSync(path.join(out, 'rpm-images.js'), `window.__RPM_IMAGES__=${JSON.stringify(map)};` + String.fromCharCode(10))
+      const html = path.join(out, 'index.html')
+      fs.writeFileSync(html, fs.readFileSync(html, 'utf8').replace('<head>', '<head><script src="./rpm-images.js"></script>'))
+    }
+  } catch { /* images illisibles : l'apercu s'affiche avec des blocs hachures */ }
+}
 const size = (d) => fs.readdirSync(d, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? size(path.join(d, e.name)) : fs.statSync(path.join(d, e.name)).size), 0)
 const result = { ok: true, name, bytes: size(out), checked: false, nodes: 0, errors: [], missing: [], thumb: null }
 
@@ -82,7 +104,7 @@ if (!flag('no-check') && EDGE) {
     const rel = decodeURIComponent((req.url ?? '/').split('?')[0]).replace(/^\/+/, '') || 'index.html'
     const f = path.resolve(out, rel)
     if (!f.startsWith(out + path.sep) || !fs.existsSync(f) || !fs.statSync(f).isFile()) { res.writeHead(404).end(); return }
-    const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' }
+    const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' }
     res.writeHead(200, { 'Content-Type': types[path.extname(f)] ?? 'application/octet-stream' }).end(fs.readFileSync(f))
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))

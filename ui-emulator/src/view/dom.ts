@@ -714,10 +714,21 @@ function applyStyle(node: Node) {
     if (inst.TextScaled) { ensureRO(node); postLayout(node) }
   }
 
-  // images : l'emulateur n'a pas (encore) acces aux assets Roblox -> bloc de remplacement
+  // images : l'emulateur n'a pas acces aux assets Roblox -> bloc de remplacement, SAUF pour les images de la bibliotheque de l'utilisateur
+  // (`window.__RPM_IMAGES__` : reference rbxlib:// ou rbxassetid:// -> fichier du paquet, voir tools/preview.mjs --images)
   if (IMAGE_CLASSES.has(cls) && inst.Image) {
     content.style.cssText += ''
-    s.backgroundImage = `repeating-linear-gradient(45deg, rgba(160,160,255,.22) 0 6px, rgba(255,255,255,.08) 6px 12px)`
+    const known = ((globalThis as any).__RPM_IMAGES__ ?? {})[String(inst.Image)]
+    if (typeof known === 'string' && /^lib\/[\w.-]+$/.test(known)) {
+      s.backgroundImage = `url("${known}")`
+      s.backgroundRepeat = 'no-repeat'
+      s.backgroundPosition = 'center'
+      const mode = inst.ScaleType?.Name
+      s.backgroundSize = mode === 'Fit' ? 'contain' : mode === 'Crop' ? 'cover' : mode === 'Tile' ? 'auto' : '100% 100%'
+      if (mode === 'Tile') s.backgroundRepeat = 'repeat'
+    } else {
+      s.backgroundImage = `repeating-linear-gradient(45deg, rgba(160,160,255,.22) 0 6px, rgba(255,255,255,.08) 6px 12px)`
+    }
     s.backgroundBlendMode = 'normal'
     el.title = String(inst.Image)
     el.dataset.img = String(inst.Image)

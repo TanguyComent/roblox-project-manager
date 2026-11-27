@@ -84,7 +84,7 @@ test('un chat commence dans son atelier : aucune branche, aucun clonage, aucun d
   assert.equal(norm(c.cwd), norm(g.atelierPath(1)), 'claude travaille dans l\'atelier du chat')
   assert.ok(existsSync(join(c.cwd, 'tsconfig.json')), 'atelier vide : tsconfig minimal pour l\'emulateur')
   assert.ok(existsSync(join(c.cwd, '.git')))
-  assert.deepEqual(c.toolNames, ['ui_preview', 'project'], 'claude voit NOS outils')
+  assert.deepEqual(c.toolNames, ['ui_preview', 'project', 'library_search', 'library_get'], 'claude voit NOS outils')
   assert.ok(events.some((e) => /Preparation de l'atelier/.test(e)))
   assert.ok(!events.some((e) => /Preparation de la branche/.test(e)))
 })

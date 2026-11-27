@@ -135,3 +135,14 @@ export function libraryHandlers(o: LibraryOptions = {}): Record<string, JobHandl
     },
   }
 }
+
+/** Cherche dans le catalogue trie de l'utilisateur (le Host verifie qu'un chat tourne sur ce Worker). */
+export async function searchLibrary(hostUrl: string, token: string, q: { query?: string; folder?: string; id?: string }, fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const url = new URL('/api/worker/library-search', hostUrl)
+  if (q.query) url.searchParams.set('q', q.query)
+  if (q.folder) url.searchParams.set('folder', q.folder)
+  if (q.id) url.searchParams.set('id', q.id)
+  const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) })
+  if (!res.ok) throw new Error(`refuse par le Host (${res.status})`)
+  return res.json()
+}

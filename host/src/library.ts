@@ -226,3 +226,40 @@ export function deleteUserLibrary(db: Db, userId: number) {
   for (const r of db.prepare('SELECT id FROM library_images WHERE user_id = ?').all(userId) as unknown as { id: string }[]) rmSync(fileOf(r.id), { force: true })
   db.prepare('DELETE FROM library_images WHERE user_id = ?').run(userId)
 }
+
+// --- recherche (outils des agents d'UI) -------------------------------------------------------------------------------------------------
+
+const norm = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+const words = (s: string) => norm(s).split(/[^a-z0-9]+/).filter(Boolean)
+
+export interface SearchHit {
+  id: string; folder: string; title: string; description: string; tags: string[]; mime: string; size: number; sha256: string
+  roblox_status: LibraryImage['roblox_status']; roblox_asset_id: string | null
+}
+
+/** Images TRIEES de l'utilisateur correspondant a la recherche (mots de la requete compares au nom, aux mots-cles, au dossier et a la description), les meilleures d'abord. */
+export function searchImages(db: Db, userId: number, o: { query?: string; folder?: string; id?: string; limit?: number }): SearchHit[] {
+  const limit = Math.max(1, Math.min(o.limit ?? 20, 50))
+  let rows = db.prepare(`SELECT ${COLS} FROM library_images WHERE user_id = ? AND status = 'sorted' ORDER BY folder, title`).all(userId) as unknown as LibraryImage[]
+  if (o.id) rows = rows.filter((r) => r.id === o.id)
+  if (o.folder) { const f = cleanFolder(o.folder); rows = rows.filter((r) => r.folder === f || r.folder.startsWith(`${f}/`)) }
+  const q = words(o.query ?? '')
+  let scored = rows.map((r) => ({ r, score: 0 }))
+  if (q.length) {
+    scored = scored.map(({ r }) => {
+      const title = words(r.title), tags = r.tags.split(',').filter(Boolean), folder = words(r.folder), desc = words(r.description)
+      let score = 0
+      for (const w of q) {
+        if (tags.includes(w) || title.includes(w)) score += 4
+        else if (title.some((t) => t.includes(w)) || tags.some((t) => t.includes(w))) score += 2
+        if (folder.some((t) => t === w || t.startsWith(w))) score += 2
+        if (desc.some((t) => t === w || t.startsWith(w))) score += 1
+      }
+      return { r, score }
+    }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)
+  }
+  return scored.slice(0, limit).map(({ r }) => ({
+    id: r.id, folder: r.folder, title: r.title, description: r.description, tags: r.tags ? r.tags.split(',') : [], mime: r.mime, size: r.size, sha256: r.sha256,
+    roblox_status: r.roblox_status, roblox_asset_id: r.roblox_asset_id,
+  }))
+}
