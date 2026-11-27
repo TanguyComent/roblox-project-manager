@@ -38,7 +38,7 @@ const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = []) => 
     ${img.description ? `<p class="lib-desc">${esc(img.description)}</p>` : ''}
     ${img.colors ? `<div class="tags colors">${chips(img.colors, 'tag color')}</div>` : ''}
     ${img.traits ? `<div class="tags">${chips(img.traits)}</div>` : ''}
-    <div class="muted small">${img.width ? `${img.width}×${img.height}${ratio ? ` (${ratio})` : ''} · ` : ''}${fmtSize(img.size)} · ${esc(img.mime.replace('image/', '').toUpperCase())}${img.source === 'generated' ? ' · generee' : ''}${img.origin ? ` · ${esc(img.origin)}` : ''}${img.roblox_status === 'published' ? ` · Roblox ${esc(img.roblox_asset_id ?? '')}` : ''}</div>
+    <div class="muted small">${img.width ? `${img.width}×${img.height}${ratio ? ` (${ratio})` : ''} · ` : ''}${fmtSize(img.size)} · ${esc(img.mime.replace('image/', '').toUpperCase())}${img.source === 'generated' ? ' · generee' : ''}${img.origin ? ` · ${esc(img.origin)}` : ''}${img.hint ? ` · ${esc(img.hint)}/` : ''}${img.roblox_status === 'published' ? ` · Roblox ${esc(img.roblox_asset_id ?? '')}` : ''}</div>
     ${robloxLine(img, csrf, targets)}
     ${locked ? '' : `<details class="lib-edit"><summary>Modifier</summary>
       <form method="post" action="/library/${img.id}/edit">${csrfField(csrf)}
@@ -50,7 +50,7 @@ const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = []) => 
         <label>Couleurs <input type="text" name="colors" maxlength="100" value="${esc(img.colors.replace(/,/g, ', '))}" placeholder="rouge, or"></label>
         <label>Description <textarea name="description" rows="2" maxlength="160">${esc(img.description)}</textarea></label>
         <label>Mots-cles <input type="text" name="tags" maxlength="300" value="${esc(img.tags.replace(/,/g, ', '))}" placeholder="epee, sword, arme"></label>
-        <label>Provenance <input type="text" name="origin" maxlength="60" value="${esc(img.origin)}" placeholder="pack Fantasy GUI"></label>
+        <label>Provenance (pack) <input type="text" name="origin" maxlength="60" value="${esc(img.origin)}" placeholder="pack Fantasy GUI"></label>
         <button type="submit">Enregistrer</button>
       </form>
       <form method="post" action="/library/${img.id}/delete">${csrfField(csrf)}<button class="danger" type="submit">Supprimer</button></form>
@@ -89,8 +89,8 @@ export function libraryPage(o: Viewer & LibraryPageData) {
     <div><h1>Bibliotheque d'images</h1>
       <p class="muted">${o.counts.sorted} triee(s) · ${o.counts.pending} en attente${busy ? ` · ${o.counts.sorting} en cours de tri` : ''}. Les agents qui construisent tes interfaces y choisissent leurs images.</p></div>
     <div class="actions">
-      <input type="file" id="lib-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
-      <button type="button" id="lib-add">Ajouter des images</button>
+      <input type="file" id="lib-input" accept="image/png,image/jpeg,image/webp,image/gif,.zip,application/zip" multiple hidden>
+      <button type="button" id="lib-add" title="Images, ou un pack complet en archive ZIP (tout ce qui n'est pas une image est ignore)">Ajouter des images ou un pack (.zip)</button>
       <form method="post" action="/library/sort" id="lib-sort-form">${csrfField(o.csrf)}<button class="primary" type="submit" id="lib-sort"${o.counts.pending && !busy ? '' : ' disabled'}>Trier${o.counts.pending ? ` ${o.counts.pending} image(s)` : ''}</button></form>
       ${busy ? `<form method="post" action="/library/sort/cancel">${csrfField(o.csrf)}<button type="submit">Annuler le tri</button></form>` : ''}
     </div>

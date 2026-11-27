@@ -1,8 +1,15 @@
 // Routes de la bibliotheque d'images : page, televersement, service des fichiers, modification, tri.
+import { createWriteStream } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { join, resolve } from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import type { Context, Hono } from 'hono'
+import { config } from './config.ts'
 import type { Env } from './app.ts'
 import {
-  LibraryError, addImage, cancelSortJobs, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
+  LibraryError, addImage, addZip, cancelSortJobs, discard, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
 } from './library.ts'
 import { groupOf, libraryGridHtml, libraryPage } from './library-views.ts'
 import type { Db } from './db.ts'
@@ -29,7 +36,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   const { db, hub, roblox, html, form, csrfOk, requireFull } = ctx
 
   const state = (a: Auth) => {
-    const sync = syncLibrary(db, a.user.id)
+    const sync = syncLibrary(db, a.user.id, hub)
     const counts = imageCounts(db, a.user.id)
     return { autoPublish: autoPublishOf(db, a.user.id), targets: publishTargets(db, a.user.id), images: listImages(db, a.user.id), counts, error: sync.error ?? undefined, noWorker: (counts.pending > 0 || counts.sorting > 0) && !hub.hasCapable(a.user.id, SORT_REQUIRES, null) }
   }
@@ -68,6 +75,28 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     }
   })
 
+  // Import d'un pack : archive ZIP (corps brut, enregistre sur le disque puis lu entree par entree : jamais en memoire). Tout ce qui n'est pas une image est ignore.
+  app.post('/library/upload-zip', async (c) => {
+    const a = requireFull(c)
+    if (a instanceof Response) return a
+    if (!csrfOk(c, c.req.header('x-csrf') ?? '')) return c.json({ error: 'Session expiree : recharge la page.' }, 403)
+    let name = ''
+    try { name = decodeURIComponent(c.req.header('x-file-name') ?? '') } catch { return c.json({ error: 'Nom de fichier invalide.' }, 400) }
+    const body = c.req.raw.body
+    if (!body) return c.json({ error: 'Archive vide.' }, 400)
+    const dir = join(resolve(config.dataDir), 'tmp')
+    await mkdir(dir, { recursive: true })
+    const tmp = join(dir, `${randomBytes(12).toString('hex')}.zip`)
+    try {
+      await pipeline(Readable.fromWeb(body as never), createWriteStream(tmp, { mode: 0o600 }))
+      return c.json(await addZip(db, a.user.id, tmp, name))
+    } catch (e) {
+      if (e instanceof LibraryError) return c.json({ error: e.message }, e.status)
+      if ((e as { code?: string })?.code === 'ERR_STREAM_PREMATURE_CLOSE') return c.json({ error: 'Envoi interrompu.' }, 400)
+      throw e
+    } finally { await discard(tmp) }
+  })
+
   // Le fichier : proprietaire seulement, image verifiee affichee en ligne, sans pouvoir executer quoi que ce soit.
   app.get('/library/:id{[0-9a-f]{32}}/file', (c) => {
     const a = requireFull(c)
@@ -101,7 +130,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   app.post('/library/sort', async (c) => {
     const p = await post(c)
     if ('res' in p) return p.res
-    try { startSort(db, hub, p.a.user.id) } catch (e) { return fail(c, p.a, e) }
+    try { startSort(db, hub, p.a.user.id, true) } catch (e) { return fail(c, p.a, e) }
     return wantsJson(c) ? c.json({ ok: true }) : back(c)
   })
 

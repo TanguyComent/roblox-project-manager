@@ -20,7 +20,7 @@ export interface LibraryOptions {
   model?: string
 }
 
-interface SortImage { id: string; name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string }
+interface SortImage { id: string; name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string; hint: string }
 interface VaultNote { scope: string; title: string; style: string; subject: string; description: string }
 export interface Vocab { scopes: string[]; traits: string[]; subjects: string[]; styles: { name: string; definition: string }[] }
 
@@ -38,7 +38,7 @@ export function sortPayload(p: unknown): { images: SortImage[]; notes: VaultNote
   for (const i of imgs.slice(0, MAX_IMAGES)) {
     if (!isObj(i) || typeof i.id !== 'string' || !/^[0-9a-f]{32}$/.test(i.id)) continue
     if (typeof i.name !== 'string' || typeof i.mime !== 'string' || !EXT[i.mime] || typeof i.size !== 'number' || typeof i.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(i.sha256)) continue
-    images.push({ id: i.id, name: i.name, mime: i.mime, size: i.size, sha256: i.sha256, width: Number.isInteger(i.width) ? (i.width as number) : 0, height: Number.isInteger(i.height) ? (i.height as number) : 0, origin: oneLine(i.origin, 60) })
+    images.push({ id: i.id, name: i.name, mime: i.mime, size: i.size, sha256: i.sha256, width: Number.isInteger(i.width) ? (i.width as number) : 0, height: Number.isInteger(i.height) ? (i.height as number) : 0, origin: oneLine(i.origin, 60), hint: oneLine(i.hint, 120) })
   }
   if (!images.length) throw new GitError('Aucune image a trier.')
   const v = isObj(p) && isObj(p.vault) ? p.vault : {}
@@ -79,7 +79,7 @@ Dossier de travail :
 - vault/ : le vault actuel (une note .md par image deja triee, dans vault/<scope>/ ; les styles sont definis dans vault/_styles/<style>.md).
 
 Images a trier :
-${files.map((f) => `${f.n}. inbox/${f.file}${f.info.width ? ` (${f.info.width}x${f.info.height})` : ''}${f.info.origin ? ` — provenance : ${f.info.origin}` : ''}`).join('\n')}
+${files.map((f) => `${f.n}. inbox/${f.file}${f.info.width ? ` (${f.info.width}x${f.info.height})` : ''}${f.info.origin ? ` — provenance : ${f.info.origin}` : ''}${f.info.hint ? ` — dossier d'origine : ${f.info.hint}` : ''}`).join('\n')}
 
 Vocabulaires EXISTANTS (reutilise-les ; n'en cree un nouveau que s'il manque vraiment) :
 - scopes : ${list(vocab.scopes, 'aucun')}
@@ -88,7 +88,7 @@ Vocabulaires EXISTANTS (reutilise-les ; n'en cree un nouveau que s'il manque vra
 - sujets deja utilises : ${list(vocab.subjects, 'aucun')}
 
 Pour CHAQUE image :
-1. Ouvre-la avec l'outil Read (tu la vois) ; regarde ce qu'elle montre vraiment.
+1. Ouvre-la avec l'outil Read (tu la vois) ; regarde ce qu'elle montre vraiment. La provenance et le dossier d'origine (packs importes) sont des INDICES de classement, pas des regles : ce que tu vois prime.
 2. scope : la SITUATION dans laquelle on l'utilise (icon, decoration, background, character, button, logo, effect, texture...). Un seul mot.
 3. style : le nom d'un style EXISTANT s'il correspond vraiment (compare avec les definitions ; les images de meme style doivent pouvoir cohabiter dans un meme ecran). Sinon cree un nom court (ex. cartoon-contour-epais) ET donne sa definition dans « style_definition » (une phrase : rendu, contours, palette). Ne cree pas un style presque identique a un existant.
 4. traits : 2 a 5 traits de style pris dans la liste des traits existants (ex. cartoon, contours-epais, saturee).

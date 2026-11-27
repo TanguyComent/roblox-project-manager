@@ -26,6 +26,9 @@ export const config = {
     maxFile: Number(env.LIBRARY_MAX_FILE_MB ?? 10) * 1048576,
     maxImages: Number(env.LIBRARY_MAX_IMAGES ?? 2000),
     userQuota: Number(env.LIBRARY_QUOTA_MB ?? 500) * 1048576,
+    /** Archive ZIP de pack d'images : taille de l'archive et nombre de fichiers qu'elle peut contenir. */
+    maxZip: Number(env.LIBRARY_MAX_ZIP_MB ?? 300) * 1048576,
+    maxZipEntries: Number(env.LIBRARY_MAX_ZIP_ENTRIES ?? 20000),
   },
   get secureCookies() { return this.publicUrl.startsWith('https://') },
 }

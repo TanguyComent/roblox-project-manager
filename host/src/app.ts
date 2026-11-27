@@ -72,8 +72,9 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   const chatBody = bodyLimit({ maxSize: 100 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
   const previewBody = bodyLimit({ maxSize: 24 * 1024 * 1024, onError: (c) => c.json({ error: 'Apercu trop gros.' }, 413) }) // 12 Mo de fichiers en base64
   const libraryBody = bodyLimit({ maxSize: config.library.maxFile + 64 * 1024, onError: (c) => c.json({ error: `Image trop grosse (${Math.round(config.library.maxFile / 1048576)} Mo maximum).` }, 413) })
+  const zipBody = bodyLimit({ maxSize: config.library.maxZip, onError: (c) => c.json({ error: `Archive trop grosse (${Math.round(config.library.maxZip / 1048576)} Mo maximum).` }, 413) })
   const uploadBody = bodyLimit({ maxSize: config.attach.maxFile + 64 * 1024, onError: (c) => c.json({ error: `Fichier trop gros (${Math.round(config.attach.maxFile / 1048576)} Mo maximum).` }, 413) })
-  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : /^\/projects\/\d+\/chats\/\d+\/attachments$/.test(c.req.path) ? uploadBody(c, next) : c.req.path === '/library/upload' ? libraryBody(c, next) : c.req.path === '/api/worker/previews' ? previewBody(c, next) : smallBody(c, next)))
+  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : /^\/projects\/\d+\/chats\/\d+\/attachments$/.test(c.req.path) ? uploadBody(c, next) : c.req.path === '/library/upload-zip' ? zipBody(c, next) : c.req.path === '/library/upload' ? libraryBody(c, next) : c.req.path === '/api/worker/previews' ? previewBody(c, next) : smallBody(c, next)))
 
   // --- controle d'origine : toute requete qui modifie l'etat doit venir de ce site ----------------------------------------------
   app.use('*', async (c, next) => {

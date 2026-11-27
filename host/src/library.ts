@@ -11,17 +11,19 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { rm } from 'node:fs/promises'
 import { cleanName, isInline, sniff } from './attachments.ts'
 import { config } from './config.ts'
 import type { Db } from './db.ts'
 import type { WorkerHub } from './worker-hub.ts'
 import { getJob } from './workers.ts'
+import { listZip, readZipEntry, ZipError } from './zip.ts'
 
 export type LibraryStatus = 'pending' | 'sorting' | 'sorted'
 
 export interface LibraryImage {
   id: string; user_id: number; file_name: string; title: string; folder: string; description: string; tags: string
-  scope: string; style: string; traits: string; subject: string; colors: string; width: number; height: number; origin: string
+  scope: string; style: string; traits: string; subject: string; colors: string; width: number; height: number; origin: string; hint: string
   status: LibraryStatus; mime: string; size: number; sha256: string; sort_job_id: number | null
   source: 'upload' | 'generated'; roblox_status: 'unpublished' | 'publishing' | 'published' | 'failed'; roblox_asset_id: string | null
   roblox_error: string | null; roblox_owner: string | null; published_by: string | null; published_at: number | null
@@ -74,6 +76,8 @@ export const cleanTraits = (raw: unknown): string => slugList(raw, 6, 24)
 export const cleanSubject = (raw: unknown): string => slug(typeof raw === 'string' ? raw : '', 40)
 /** Couleurs dominantes : 4 au plus, noms normalises (« rouge », « bleu-nuit »). */
 export const cleanColors = (raw: unknown): string => slugList(raw, 4, 20)
+/** Dossier d'origine dans un pack (indice de classement). */
+export const cleanHint = (raw: unknown): string => (typeof raw === 'string' ? raw : '').replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)
 export const cleanOrigin = (raw: unknown): string => (typeof raw === 'string' ? raw : '').replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
 /** Nom de la note (et de l'image) dans le vault. */
 export function cleanTitle(raw: unknown, fallback = 'image'): string {
@@ -132,7 +136,7 @@ function uniqueTitle(db: Db, userId: number, folder: string, title: string, exce
 
 // --- lecture ----------------------------------------------------------------------------------------------------------------------------
 
-const COLS = 'id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, roblox_error, roblox_owner, published_by, published_at, roblox_op, roblox_account_id, created_at, sorted_at'
+const COLS = 'id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, hint, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, roblox_error, roblox_owner, published_by, published_at, roblox_op, roblox_account_id, created_at, sorted_at'
 
 export const listImages = (db: Db, userId: number) =>
   db.prepare(`SELECT ${COLS} FROM library_images WHERE user_id = ? ORDER BY CASE status WHEN 'sorted' THEN 1 ELSE 0 END, scope, title, created_at DESC, id`).all(userId) as unknown as LibraryImage[]
@@ -164,7 +168,7 @@ const ensureStyle = (db: Db, userId: number, name: string, definition: string) =
 // --- ajout, modification, suppression ---------------------------------------------------------------------------------------------------
 
 /** Ajoute une image (« en attente »). Toutes les limites sont verifiees ici. `source` : `generated` pour une image creee par une IA. */
-export function addImage(db: Db, userId: number, rawName: unknown, data: Buffer, source: 'upload' | 'generated' = 'upload', origin = ''): LibraryImage {
+export function addImage(db: Db, userId: number, rawName: unknown, data: Buffer, source: 'upload' | 'generated' = 'upload', origin = '', hint = ''): LibraryImage {
   const l = config.library
   if (data.length > l.maxFile) throw new LibraryError(`Image trop grosse (${Math.round(l.maxFile / 1048576)} Mo maximum).`, 413)
   const name = cleanName(rawName)
@@ -180,9 +184,9 @@ export function addImage(db: Db, userId: number, rawName: unknown, data: Buffer,
   const dims = imageSize(data) ?? { width: 0, height: 0 }
   const sha256 = createHash('sha256').update(data).digest('hex')
   const created = Date.now()
-  db.prepare(`INSERT INTO library_images (id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, created_at, sorted_at)
-    VALUES (?, ?, ?, ?, '', '', '', '', '', '', '', '', ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, 'unpublished', NULL, ?, NULL)`)
-    .run(id, userId, name, cleanTitle(name), dims.width, dims.height, cleanOrigin(origin), s.mime, data.length, sha256, source, created)
+  db.prepare(`INSERT INTO library_images (id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, hint, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, created_at, sorted_at)
+    VALUES (?, ?, ?, ?, '', '', '', '', '', '', '', '', ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, 'unpublished', NULL, ?, NULL)`)
+    .run(id, userId, name, cleanTitle(name), dims.width, dims.height, cleanOrigin(origin), cleanHint(hint), s.mime, data.length, sha256, source, created)
   return getImage(db, userId, id)!
 }
 
@@ -261,12 +265,13 @@ function vaultSummary(db: Db, userId: number) {
 }
 
 /** Envoie les images en attente (40 au plus par tache) a un agent. */
-export function startSort(db: Db, hub: WorkerHub, userId: number): { jobId: number; count: number } {
+export function startSort(db: Db, hub: WorkerHub, userId: number, chain = false): { jobId: number; count: number } {
   if (db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'sorting'").get(userId)) throw new LibraryError('Un tri est deja en cours.', 409)
-  const pending = db.prepare("SELECT id, file_name, mime, size, sha256, width, height, origin FROM library_images WHERE user_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT ?").all(userId, SORT_BATCH) as unknown as { id: string; file_name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string }[]
+  const pending = db.prepare("SELECT id, file_name, mime, size, sha256, width, height, origin, hint FROM library_images WHERE user_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT ?").all(userId, SORT_BATCH) as unknown as { id: string; file_name: string; mime: string; size: number; sha256: string; width: number; height: number; origin: string; hint: string }[]
   if (!pending.length) throw new LibraryError('Aucune image en attente.', 409)
   const jobId = hub.enqueue(userId, 'library.sort', {
-    images: pending.map((p) => ({ id: p.id, name: p.file_name, mime: p.mime, size: p.size, sha256: p.sha256, width: p.width, height: p.height, origin: p.origin })),
+    images: pending.map((p) => ({ id: p.id, name: p.file_name, mime: p.mime, size: p.size, sha256: p.sha256, width: p.width, height: p.height, origin: p.origin, hint: p.hint })),
+    chain,
     vault: vaultSummary(db, userId),
   }, { requires: SORT_REQUIRES })
   db.prepare(`UPDATE library_images SET status = 'sorting', sort_job_id = ? WHERE id IN (${pending.map(() => '?').join(',')})`).run(jobId, ...pending.map((p) => p.id))
@@ -287,20 +292,27 @@ export function resetSorting(db: Db, userId: number, jobId?: number) {
 }
 
 /** Reporte le resultat des taches de tri terminees (appelee a l'ouverture de la page et pendant son suivi en direct). */
-export function syncLibrary(db: Db, userId: number): { error: string | null } {
+export function syncLibrary(db: Db, userId: number, hub?: WorkerHub): { error: string | null } {
   let error: string | null = null
   for (const jobId of sortingJobIds(db, userId)) {
     const job = getJob(db, userId, jobId)
     if (!job) { resetSorting(db, userId, jobId); continue }
     if (job.status === 'queued' || job.status === 'running') continue
-    if (job.status === 'succeeded') applySort(db, userId, jobId, job.result)
+    if (job.status === 'succeeded') {
+      const sorted = applySort(db, userId, jobId, job.result)
+      // « Trier » traite TOUTES les images en attente, par lots : tant que le lot precedent a avance, on lance le suivant (un lot sans progres arrete la chaine)
+      const chain = !!job.payload && typeof job.payload === 'object' && (job.payload as { chain?: unknown }).chain === true
+      if (hub && chain && sorted > 0 && !sortingJobIds(db, userId).length && (db.prepare("SELECT 1 FROM library_images WHERE user_id = ? AND status = 'pending'").get(userId))) {
+        try { startSort(db, hub, userId, true) } catch { /* plus rien a trier */ }
+      }
+    }
     else { resetSorting(db, userId, jobId); error = job.status === 'cancelled' ? 'Tri annule.' : `Le tri a echoue : ${String(job.error ?? 'erreur inconnue').slice(0, 300)}` }
   }
   return { error }
 }
 
 /** Applique ce que l'agent a decide. Tout est revalide ; une image sans proposition valable reste « en attente ». */
-export function applySort(db: Db, userId: number, jobId: number, result: unknown) {
+export function applySort(db: Db, userId: number, jobId: number, result: unknown): number {
   const sortedList = (result && typeof result === 'object' ? (result as { sorted?: unknown }).sorted : undefined)
   const decided = new Set<string>()
   if (Array.isArray(sortedList)) {
@@ -322,6 +334,7 @@ export function applySort(db: Db, userId: number, jobId: number, result: unknown
     }
   }
   resetSorting(db, userId, jobId) // les images restantes retournent en attente
+  return decided.size
 }
 
 /** Fichiers supprimes avec le compte (appele avant la suppression de l'utilisateur). */
@@ -389,3 +402,63 @@ export function searchImages(db: Db, userId: number, o: SearchOptions): SearchHi
   }
   return scored.slice(0, limit).map(({ r }) => toHit(r))
 }
+
+// --- import d'un pack (archive ZIP) --------------------------------------------------------------------------------------------------------
+
+export interface ZipReport {
+  /** Images ajoutees (« en attente »). */
+  added: number
+  /** Images deja presentes dans la bibliotheque (meme contenu) : ignorees. */
+  duplicates: number
+  /** Fichiers qui ne sont pas des images (textes, PSD, SVG, sons, dossiers...) : ignores, jamais conserves. */
+  ignored: number
+  /** Images illisibles, corrompues, trop grosses ou d'un format refuse. */
+  rejected: number
+  /** Raison d'un arret anticipe (bibliotheque pleine...), sinon null. */
+  stopped: string | null
+}
+
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i
+const importing = new Set<number>()
+
+/**
+ * Importe les images d'une archive ZIP : tout ce qui n'est pas une image est ignore (jamais ecrit sur le disque), chaque image est verifiee par ses octets comme n'importe
+ * quel ajout, le doublon exact d'une image deja presente est ecarte. Le nom du pack (de l'archive) devient la provenance, le dossier interne un indice de classement.
+ */
+export async function addZip(db: Db, userId: number, zipPath: string, zipName: string): Promise<ZipReport> {
+  if (importing.has(userId)) throw new LibraryError('Un import est deja en cours : attends sa fin.', 409)
+  importing.add(userId)
+  try {
+    const l = config.library
+    let entries
+    try { entries = await listZip(zipPath, { maxEntries: l.maxZipEntries, maxEntryBytes: l.maxFile }) } catch (e) {
+      if (e instanceof ZipError) throw new LibraryError(e.message)
+      throw e
+    }
+    const origin = cleanOrigin(cleanName(zipName).replace(/\.zip$/i, ''))
+    const seen = new Set((db.prepare('SELECT sha256 FROM library_images WHERE user_id = ?').all(userId) as unknown as { sha256: string }[]).map((r) => r.sha256))
+    const r: ZipReport = { added: 0, duplicates: 0, ignored: 0, rejected: 0, stopped: null }
+    for (const e of entries) {
+      if (e.skip === 'directory' || !IMAGE_EXT.test(e.name)) { r.ignored++; continue }
+      if (e.skip) { r.rejected++; continue }
+      let data: Buffer
+      try { data = await readZipEntry(zipPath, e) } catch { r.rejected++; continue }
+      const sha = createHash('sha256').update(data).digest('hex')
+      if (seen.has(sha)) { r.duplicates++; continue }
+      const slash = e.name.lastIndexOf('/')
+      try {
+        addImage(db, userId, slash < 0 ? e.name : e.name.slice(slash + 1), data, 'upload', origin, slash < 0 ? '' : e.name.slice(0, slash))
+        seen.add(sha)
+        r.added++
+      } catch (err) {
+        if (!(err instanceof LibraryError)) throw err
+        if (err.status === 413 && /pleine?/i.test(err.message)) { r.stopped = err.message; break } // bibliotheque pleine : inutile de continuer
+        r.rejected++
+      }
+    }
+    return r
+  } finally { importing.delete(userId) }
+}
+
+/** Supprime un fichier temporaire sans jamais echouer. */
+export const discard = (path: string) => rm(path, { force: true }).catch(() => {})

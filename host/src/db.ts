@@ -289,6 +289,8 @@ export const MIGRATIONS = [
      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
      auto_publish INTEGER NOT NULL DEFAULT 1
    );`,
+  // 18 : dossier d'origine d'une image importee depuis un pack ZIP (indice de classement pour l'agent).
+  `ALTER TABLE library_images ADD COLUMN hint TEXT NOT NULL DEFAULT '';`,
 ]
 
 export function openDb(file?: string): Db {
