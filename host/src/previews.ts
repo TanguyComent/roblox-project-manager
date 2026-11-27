@@ -7,6 +7,7 @@ import { config } from './config.ts'
 import type { Db } from './db.ts'
 
 export const VIEWPORTS = ['UI Labs', 'Desktop', 'Tablette', 'Telephone'] as const
+export const ROOTS = ['project', 'sandbox'] as const // d'ou vient la story : le projet, ou l'atelier du chat
 export const MAX_FILES = 300
 export const MAX_FILE_BYTES = 6 * 1024 * 1024
 export const MAX_TOTAL_BYTES = 12 * 1024 * 1024
@@ -23,7 +24,7 @@ const ID = /^[0-9a-f]{32}$/
 const PATH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/
 
 export interface PreviewRow {
-  id: string; job_id: number; n: number; title: string; file: string; viewport: string; ok: boolean; error: string | null
+  id: string; job_id: number; n: number; title: string; file: string; viewport: string; root: 'project' | 'sandbox'; ok: boolean; error: string | null
   checked: boolean; nodes: number; errors: string[]; missing: string[]; bytes: number
 }
 
@@ -40,7 +41,7 @@ export function safePath(p: unknown): string | null {
 const extOf = (p: string) => { const i = p.lastIndexOf('.'); return i < 0 ? '' : p.slice(i).toLowerCase() }
 
 export interface UploadBody {
-  jobId: unknown; n: unknown; title: unknown; file: unknown; viewport: unknown; ok: unknown; error: unknown
+  jobId: unknown; n: unknown; title: unknown; file: unknown; viewport: unknown; root?: unknown; ok: unknown; error: unknown
   checked: unknown; nodes: unknown; errors: unknown; missing: unknown; files: unknown
 }
 
@@ -62,6 +63,7 @@ export function savePreview(db: Db, worker: { id: number; user_id: number }, bod
   const n = Number(body.n)
   if (!Number.isInteger(n) || n < 0 || n >= MAX_PREVIEWS_PER_JOB + 4) throw new PreviewError('Rang de bloc invalide.')
   const viewport = typeof body.viewport === 'string' && (VIEWPORTS as readonly string[]).includes(body.viewport) ? body.viewport : 'UI Labs'
+  const root = body.root === 'sandbox' ? 'sandbox' : 'project'
   const title = typeof body.title === 'string' ? body.title.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 80) : ''
   const file = typeof body.file === 'string' ? body.file.replace(/[\u0000-\u001f]/g, ' ').slice(0, 300) : ''
   const ok = body.ok === true
@@ -102,9 +104,9 @@ export function savePreview(db: Db, worker: { id: number; user_id: number }, bod
     }
   }
   db.prepare(
-    `INSERT INTO previews (id, user_id, job_id, n, title, file, viewport, ok, error, checked, nodes, errors_json, missing_json, bytes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, worker.user_id, jobId, n, title, file, viewport, ok ? 1 : 0, error, body.checked === true ? 1 : 0, Math.max(0, Math.min(1e6, Number(body.nodes) || 0)),
+    `INSERT INTO previews (id, user_id, job_id, n, title, file, viewport, root, ok, error, checked, nodes, errors_json, missing_json, bytes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, worker.user_id, jobId, n, title, file, viewport, root, ok ? 1 : 0, error, body.checked === true ? 1 : 0, Math.max(0, Math.min(1e6, Number(body.nodes) || 0)),
     JSON.stringify(strings(body.errors, 5, 300)), JSON.stringify(strings(body.missing, 20, 120)), total, Date.now())
   return id
 }
@@ -120,7 +122,7 @@ const toRow = (r: Row): PreviewRow => {
 export function previewsForJobs(db: Db, jobIds: number[]): Map<number, PreviewRow[]> {
   const out = new Map<number, PreviewRow[]>()
   if (!jobIds.length) return out
-  const rows = db.prepare(`SELECT id, job_id, n, title, file, viewport, ok, error, checked, nodes, errors_json, missing_json, bytes FROM previews WHERE job_id IN (${jobIds.map(() => '?').join(',')}) ORDER BY n`).all(...jobIds) as unknown as Row[]
+  const rows = db.prepare(`SELECT id, job_id, n, title, file, viewport, root, ok, error, checked, nodes, errors_json, missing_json, bytes FROM previews WHERE job_id IN (${jobIds.map(() => '?').join(',')}) ORDER BY n`).all(...jobIds) as unknown as Row[]
   for (const r of rows) {
     if (!out.has(r.job_id)) out.set(r.job_id, [])
     out.get(r.job_id)!.push(toRow(r))

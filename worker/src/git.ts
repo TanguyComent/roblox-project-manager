@@ -8,7 +8,7 @@
 // supprimes, mais seulement s'ils n'ont aucune modification en cours et que tout est deja pousse (rien n'est jamais perdu).
 // Rien n'est lance via un shell, chaque argument est valide, aucun « force push ».
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { JobCancelled, type JobContext, type JobHandler } from './jobs.ts'
 
@@ -36,7 +36,19 @@ export interface Git {
   exec(project: string, branch: string, args: string[], ctx: Pick<JobContext, 'signal' | 'event'>): Promise<string>
   /** Marque un projet « en cours d'utilisation » le temps de `fn` : le nettoyage ne le touche pas. */
   withProject<T>(project: string, fn: () => Promise<T>): Promise<T>
+  /** Dossiers d'un projet (sans les creer) : clone principal et dossier de travail de la branche. */
+  projectPaths(project: string, branch: string): { repo: string; worktree: string }
+  /** Copie en lecture seule du projet (branche principale a jour, remise a zero a chaque appel). */
+  reference(project: string, url: string, ctx: RunCtxLike, token?: string | null): Promise<{ path: string; defaultBranch: string; cloned: boolean }>
+  /** Remet la copie de reference a zero ; renvoie le nombre de fichiers qui avaient ete touches. */
+  cleanReference(project: string, ctx: RunCtxLike): Promise<number>
+  atelierPath(chatId: number): string
+  /** Atelier d'un chat : dossier libre (copie du kit de composants si `seed`, jamais pousse), cree au premier besoin. */
+  ensureAtelier(chatId: number, seed: { url: string; base?: string | null } | null, ctx: RunCtxLike, token?: string | null): Promise<{ path: string; seeded: boolean }>
+  sweepAteliers(days?: number): number[]
+  withAtelier<T>(chatId: number, fn: () => Promise<T>): Promise<T>
 }
+type RunCtxLike = Pick<JobContext, 'signal' | 'event'>
 
 const DAY = 86_400_000
 const PROJECT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -95,7 +107,9 @@ const noCtx = (): RunCtx => ({ signal: new AbortController().signal, event: () =
 export function createGit(o: GitOptions): Git {
   const now = o.now ?? Date.now
   const allow = o.allowUrl ?? defaultAllowUrl
-  const busy = new Set<string>() // projets en cours d'utilisation : jamais nettoyes pendant une tache
+  // projets (et ateliers) en cours d'utilisation : jamais nettoyes pendant une tache. Un COMPTEUR : les appels s'imbriquent (une tache de chat
+  // protege son projet, puis appelle git.prepare qui le protege a son tour) et la protection ne tombe qu'a la fin du dernier.
+  const busy = new Map<string, number>()
 
   function workspaceOf(): string {
     const ws = o.workspace()
@@ -163,14 +177,60 @@ export function createGit(o: GitOptions): Git {
   }
 
   const withProject = async <T>(project: string, fn: () => Promise<T>): Promise<T> => {
-    busy.add(project)
-    try { return await fn() } finally { busy.delete(project) }
+    busy.set(project, (busy.get(project) ?? 0) + 1)
+    try { return await fn() } finally {
+      const left = (busy.get(project) ?? 1) - 1
+      if (left > 0) busy.set(project, left); else busy.delete(project)
+    }
   }
 
   const summary = async (cwd: string, ctx: RunCtx) => ({
     branch: (await run(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, ctx })).trim(),
     head: (await run(['rev-parse', '--short', 'HEAD'], { cwd, ctx }).catch(() => '')).trim() || null,
   })
+
+  // Clone principal d'un projet (cree a la demande, mis a jour sinon) : un seul par projet, en HEAD detache. Sert de base aux dossiers de travail
+  // des branches ET de copie en lecture seule du projet (reference).
+  async function ensureRepo(project: string, url: string, ctx: RunCtx, token: string | null) {
+    const ws = workspaceOf()
+    const known = loadRegistry(ws).projects[project]
+    if (known && known.url !== url) fail('Ce projet est deja associe a un autre depot sur ce Worker.')
+    const pdir = join(ws, project)
+    const repo = join(pdir, 'repo')
+    let cloned = false
+    if (!existsSync(join(repo, '.git'))) {
+      if (existsSync(repo)) rmSync(repo, { recursive: true, force: true }) // reste d'un clonage interrompu, ou dossier vide reserve par l'appelant
+      mkdirSync(pdir, { recursive: true })
+      await run(['clone', '--', url, repo], { cwd: pdir, ctx, token, timeoutMs: 1_800_000 })
+      await run(['checkout', '--detach'], { cwd: repo, ctx }) // aucune branche n'est « prise » dans le clone principal
+      cloned = true
+    } else {
+      await run(['fetch', '--prune', 'origin'], { cwd: repo, ctx, token, timeoutMs: 600_000 })
+    }
+    return { ws, pdir, repo, cloned }
+  }
+
+  const registerProject = (ws: string, project: string, url: string) => {
+    const reg = loadRegistry(ws)
+    const p = (reg.projects[project] ??= { url, lastUsed: now(), branches: {} })
+    p.url = url
+    p.lastUsed = now()
+    saveRegistry(ws, reg)
+  }
+
+  // --- ateliers : un dossier libre par chat (jamais pousse), copie du kit de composants quand il y en a un ---------------------------------------
+  const atelierDir = (ws: string, chatId: number) => join(ws, '_atelier', String(chatId))
+  const ateliersFile = (ws: string) => join(ws, '.rpm', 'ateliers.json')
+  const loadAteliers = (ws: string): Record<string, { lastUsed: number }> => {
+    try { const r = JSON.parse(readFileSync(ateliersFile(ws), 'utf8')) as { ateliers?: Record<string, { lastUsed: number }> }; return r.ateliers && typeof r.ateliers === 'object' ? r.ateliers : {} } catch { return {} }
+  }
+  const saveAteliers = (ws: string, a: Record<string, { lastUsed: number }>) => {
+    mkdirSync(join(ws, '.rpm'), { recursive: true })
+    const tmp = `${ateliersFile(ws)}.tmp`
+    writeFileSync(tmp, JSON.stringify({ ateliers: a }, null, 2))
+    renameSync(tmp, ateliersFile(ws))
+  }
+  const chatIdOf = (id: unknown) => (typeof id === 'number' && Number.isInteger(id) && id > 0 && id < 1e12 ? id : fail('Identifiant de chat invalide.'))
 
   const handlers: Record<string, JobHandler> = {
     // Prepare le dossier de travail d'une branche : clone le depot si besoin, sinon le met a jour ; cree le dossier de la branche s'il n'existe pas,
@@ -183,29 +243,16 @@ export function createGit(o: GitOptions): Git {
       const base = branchName(ctx.payload, 'base', false)
       const token = optToken(ctx.payload)
       return withProject(project, async () => {
-        const ws = workspaceOf()
-        const reg = loadRegistry(ws)
-        const known = reg.projects[project]
-        if (known && known.url !== url) fail('Ce projet est deja associe a un autre depot sur ce Worker.')
-        const pdir = join(ws, project)
-        const repo = join(pdir, 'repo')
-        let cloned = false
-        if (!existsSync(join(repo, '.git'))) {
-          if (existsSync(repo)) rmSync(repo, { recursive: true, force: true }) // reste d'un clonage interrompu
-          mkdirSync(pdir, { recursive: true })
-          await run(['clone', '--', url, repo], { cwd: pdir, ctx, token, timeoutMs: 1_800_000 })
-          await run(['checkout', '--detach'], { cwd: repo, ctx }) // aucune branche n'est « prise » dans le clone principal
-          cloned = true
-        } else {
-          await run(['fetch', '--prune', 'origin'], { cwd: repo, ctx, token, timeoutMs: 600_000 })
-        }
+        const { ws, pdir, repo, cloned } = await ensureRepo(project, url, ctx, token)
         const def = await defaultBranch(repo, ctx)
         if (isProtected(branch, def)) fail(`Les taches ne travaillent jamais directement sur « ${branch} » (branche principale) : utilise une branche dediee.`)
 
         const path = join(pdir, 'branches', encodeBranch(branch))
         let created = false
         let newBranch = false
-        if (existsSync(path)) {
+        // un dossier VIDE (reserve d'avance pour que l'IA puisse y ecrire des l'ouverture de la branche) n'est pas un dossier existant : git y ajoute le worktree
+        const reserved = existsSync(path) && statSync(path).isDirectory() && readdirSync(path).length === 0
+        if (existsSync(path) && !reserved) {
           if (!existsSync(join(path, '.git'))) fail(`Dossier inattendu, a supprimer a la main : ${project}/branches/${encodeBranch(branch)}`)
           const current = (await run(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: path, ctx })).trim()
           if (current !== branch) fail(`Le dossier de travail est sur « ${current} » et non « ${branch} ».`)
@@ -345,6 +392,97 @@ export function createGit(o: GitOptions): Git {
   }
 
   return {
+    /** Dossiers d'un projet (sans les creer) : clone principal et dossier de travail de la branche. */
+    projectPaths(project: string, branch: string) {
+      projectName({ project }) // valides AVANT de construire un chemin : un nom comme « ../x » ne doit jamais atteindre le disque
+      branchName({ branch }, 'branch')
+      const ws = workspaceOf()
+      return { repo: join(ws, project, 'repo'), worktree: join(ws, project, 'branches', encodeBranch(branch)) }
+    },
+
+    /**
+     * Copie en LECTURE SEULE du projet (branche principale a jour). Elle est remise a zero (modifications et fichiers ajoutes) a chaque appel :
+     * l'IA y lit le code existant sans jamais pouvoir le modifier durablement.
+     */
+    async reference(project, url, ctx, token = null) {
+      if (url.startsWith('-') || !allow(url)) fail("Adresse de depot refusee (https ou ssh uniquement, sans identifiants dans l'URL).")
+      return withProject(project, async () => {
+        const { ws, repo, cloned } = await ensureRepo(project, url, ctx, token)
+        const def = await defaultBranch(repo, ctx)
+        await run(['checkout', '-f', '--detach', `origin/${def}`], { cwd: repo, ctx })
+        await run(['clean', '-fdq'], { cwd: repo, ctx })
+        registerProject(ws, project, url)
+        return { path: repo, defaultBranch: def, cloned }
+      })
+    },
+
+    /** Remet la copie de reference dans son etat d'origine (apres un tour de l'IA) ; renvoie le nombre de fichiers qui avaient ete touches. */
+    async cleanReference(project, ctx) {
+      const repo = join(workspaceOf(), project, 'repo')
+      if (!existsSync(join(repo, '.git'))) return 0
+      const dirty = (await run(['status', '--porcelain'], { cwd: repo, ctx })).split('\n').filter(Boolean).length
+      if (dirty) { await run(['reset', '--hard'], { cwd: repo, ctx }); await run(['clean', '-fdq'], { cwd: repo, ctx }) }
+      return dirty
+    },
+
+    atelierPath(chatId) { return atelierDir(workspaceOf(), chatIdOf(chatId)) },
+
+    /**
+     * Atelier d'un chat : dossier libre, cree au premier besoin. Avec un depot de maquette (`seed`) c'est une copie superficielle de son kit de composants
+     * dont le lien vers GitHub est RETIRE (rien ne peut en partir) ; sans, un dossier vide avec un tsconfig minimal. Les modifications restent locales.
+     */
+    async ensureAtelier(chatId, seed, ctx, token = null) {
+      const id = chatIdOf(chatId)
+      const ws = workspaceOf()
+      const dir = atelierDir(ws, id)
+      let seeded = false
+      if (!existsSync(dir)) {
+        mkdirSync(join(ws, '_atelier'), { recursive: true })
+        if (seed) {
+          if (seed.url.startsWith('-') || !allow(seed.url)) fail("Adresse du depot de maquette refusee (https ou ssh uniquement, sans identifiants dans l'URL).")
+          if (seed.base) branchName({ b: seed.base }, 'b')
+          try {
+            await run(['clone', '--depth', '1', ...(seed.base ? ['--branch', seed.base] : []), '--', seed.url, dir], { cwd: join(ws, '_atelier'), ctx, token, timeoutMs: 600_000 })
+            await run(['remote', 'remove', 'origin'], { cwd: dir, ctx, quiet: true })
+            seeded = true
+          } catch (e) {
+            rmSync(dir, { recursive: true, force: true })
+            throw e
+          }
+        } else {
+          mkdirSync(dir, { recursive: true })
+          await run(['init', '-q'], { cwd: dir, ctx, quiet: true })
+          writeFileSync(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { jsx: 'react', strict: true } }, null, 2))
+        }
+      }
+      const a = loadAteliers(ws)
+      a[String(id)] = { lastUsed: now() }
+      saveAteliers(ws, a)
+      return { path: dir, seeded }
+    },
+
+    /** Ateliers inutilises depuis plus de `days` jours (30 par defaut) : supprimes, sauf ceux d'un chat en cours de reponse. */
+    sweepAteliers(days = 30) {
+      const removed: number[] = []
+      if (!o.workspace()) return removed
+      const ws = workspaceOf()
+      const a = loadAteliers(ws)
+      const limit = now() - days * DAY
+      for (const [id, v] of Object.entries(a)) {
+        if (busy.has(`atelier:${id}`)) continue
+        const dir = atelierDir(ws, Number(id))
+        if (!existsSync(dir)) { delete a[id]; continue }
+        if (v.lastUsed > limit) continue
+        try { rmSync(dir, { recursive: true, force: true }) } catch { continue } // dossier verrouille (processus encore en train de se terminer) : au prochain passage
+        delete a[id]
+        removed.push(Number(id))
+      }
+      saveAteliers(ws, a)
+      return removed
+    },
+
+    withAtelier<T>(chatId: number, fn: () => Promise<T>): Promise<T> { return withProject(`atelier:${chatIdOf(chatId)}`, fn) },
+
     handlers,
     sweep,
     withProject,

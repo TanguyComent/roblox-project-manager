@@ -4,7 +4,7 @@ import { config, ensureDataDir } from './config.ts'
 
 export type Db = DatabaseSync
 
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `CREATE TABLE users (
      id INTEGER PRIMARY KEY,
      email TEXT NOT NULL UNIQUE,
@@ -219,6 +219,13 @@ const MIGRATIONS = [
   // 12 : depot de maquette UI choisi parmi les depots du compte GitHub connecte (remplace le depot fixe)
   `ALTER TABLE github_connections ADD COLUMN ui_template_repo TEXT;
    ALTER TABLE github_connections ADD COLUMN ui_template_branch TEXT;`,
+  // 13 : un chat ne cree plus de branche a sa creation. Il travaille dans un « atelier » (dossier libre sur le Worker) et la branche du projet n'est ouverte
+  //      que quand l'IA doit modifier le projet (branch_open). Les chats deja utilises sur leur branche l'ont ouverte ; leur conversation Claude est
+  //      repartie de zero (son dossier de travail change : l'atelier). Les apercus savent d'ou vient leur story (project / sandbox = atelier).
+  `ALTER TABLE chats ADD COLUMN branch_open INTEGER NOT NULL DEFAULT 0;
+   UPDATE chats SET branch_open = 1 WHERE mode = 'project' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = chats.id);
+   UPDATE chats SET session_id = NULL;
+   ALTER TABLE previews ADD COLUMN root TEXT NOT NULL DEFAULT 'project';`,
 ]
 
 export function openDb(file?: string): Db {

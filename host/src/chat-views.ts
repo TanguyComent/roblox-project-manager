@@ -38,16 +38,13 @@ export function chatListHtml(o: { project: Project; chats: Chat[]; activeId: num
     <li class="chat-item${c.id === o.activeId ? ' active' : ''}${c.state === 'unread' ? ' is-unread' : ''}">
       <a href="/projects/${p.id}/chats/${c.id}"${c.id === o.activeId ? ' aria-current="page"' : ''}>
         ${dot(c.id === o.activeId && c.state === 'unread' ? 'idle' : c.state)}
-        <span class="txt"><span class="t">${c.mode === 'concept' ? '<span class="tag">Maquette</span>' : ''}${esc(c.title)}</span><span class="s">${esc(STATE_LABEL[c.state] || ago(c.updated_at))}${c.state !== 'idle' && c.state !== 'running' && c.state !== 'queued' ? ` · ${esc(ago(c.updated_at))}` : ''}</span></span>
+        <span class="txt"><span class="t">${esc(c.title)}</span><span class="s">${esc(STATE_LABEL[c.state] || ago(c.updated_at))}${c.state !== 'idle' && c.state !== 'running' && c.state !== 'queued' ? ` · ${esc(ago(c.updated_at))}` : ''}</span></span>
       </a>
     </li>`).join('')
   return `
   <div class="chat-list-head">
     <div class="proj"><a href="/projects/${p.id}" title="Retour au projet">${esc(p.name)}</a><small>${o.chats.length} chat${o.chats.length > 1 ? 's' : ''}</small></div>
-    <div class="newrow">
-      <form method="post" action="/projects/${p.id}/chats">${csrfField(o.csrf)}<button class="primary" type="submit">+ Nouveau chat</button></form>
-      <form method="post" action="/projects/${p.id}/chats">${csrfField(o.csrf)}<input type="hidden" name="mode" value="concept"><button type="submit" title="Maquette d'interface dans un depot minimal, avec de fausses donnees">Maquette UI</button></form>
-    </div>
+    <form method="post" action="/projects/${p.id}/chats">${csrfField(o.csrf)}<button class="primary" type="submit">+ Nouveau chat</button></form>
   </div>
   ${o.chats.length ? `<ul class="chat-items">${items}</ul>` : '<p class="chat-empty">Aucun chat pour ce projet.</p>'}`
 }
@@ -81,7 +78,7 @@ export function uiBlockHtml(n: number, rows: PreviewRow[] | undefined): string {
   if (!row) return `<div class="ui-preview unavailable"><p class="muted small">Apercu indisponible pour ce bloc.</p></div>`
   const title = esc(row.title || row.file)
   if (!row.ok) {
-    return `<div class="ui-preview failed"><div class="ui-preview-head"><strong>${title}</strong><span class="chip">${esc(row.file)}</span></div>${alert(`Apercu impossible : ${row.error ?? 'erreur inconnue'}`)}</div>`
+    return `<div class="ui-preview failed"><div class="ui-preview-head"><strong>${title}</strong>${row.root === 'sandbox' ? '<span class="chip accent" title="Concept dans l\'atelier du chat">Atelier</span>' : ''}<span class="chip">${esc(row.file)}</span></div>${alert(`Apercu impossible : ${row.error ?? 'erreur inconnue'}`)}</div>`
   }
   const src = esc(`/preview/${row.id}/index.html?embed=1&vp=${encodeURIComponent(row.viewport)}`)
   const notes = [
@@ -89,7 +86,7 @@ export function uiBlockHtml(n: number, rows: PreviewRow[] | undefined): string {
     row.missing.length ? `<details class="small muted"><summary>${row.missing.length} module${row.missing.length > 1 ? 's' : ''} du jeu remplace${row.missing.length > 1 ? 's' : ''} par l'emulateur</summary><p>${row.missing.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p></details>` : '',
   ].join('')
   return `<div class="ui-preview" data-pid="${row.id}">
-    <div class="ui-preview-head"><strong>${title}</strong><span class="chip" title="Format d'ecran">${esc(row.viewport)}</span><span class="chip" title="Fichier de la story">${esc(row.file)}</span>
+    <div class="ui-preview-head"><strong>${title}</strong>${row.root === 'sandbox' ? '<span class="chip accent" title="Concept dans l\'atelier du chat : de fausses donnees, rien d\'integre au projet">Atelier</span>' : ''}<span class="chip" title="Format d'ecran">${esc(row.viewport)}</span><span class="chip" title="Fichier de la story">${esc(row.file)}</span>
       <a class="small" href="${src}" target="_blank" rel="noopener noreferrer">Ouvrir ↗</a></div>
     <iframe class="${VP_CLASS[row.viewport] ?? 'vp-uilabs'}" src="${src}" sandbox="allow-scripts" loading="lazy" referrerpolicy="no-referrer" title="${title}"></iframe>
     ${notes}
@@ -121,18 +118,12 @@ function assistantHtml(m: ChatMessage, events: JobEvent[], previews: PreviewRow[
 }
 
 /** Fil de la conversation (renvoye tel quel par l'endpoint live). */
-export function threadHtml(o: { messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>; hasRepo: boolean; noWorker: boolean; workerName: string | null; concept?: boolean }) {
+export function threadHtml(o: { messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>; noWorker: boolean; workerName: string | null }) {
   const parts: string[] = []
-  if (!o.hasRepo) {
-    parts.push(alert(o.concept
-      ? "Aucun depot de maquette n'est choisi : definis-le dans Compte, section GitHub (« Depot de maquette UI »), pour pouvoir creer des maquettes."
-      : "Ce projet n'a pas de depot GitHub : renseigne-le dans le projet pour pouvoir discuter avec l'IA (ou cree une maquette UI, qui n'a pas besoin du depot du projet)."))
-  }
   if (o.noWorker) parts.push(alert(`Aucun Worker connecte${o.workerName ? ` (« ${o.workerName} »)` : ''} ne dispose de Git et de Claude Code : la demande attend. Lance un Worker, ou verifie ses outils sur la page Workers.`))
   if (!o.messages.length) {
-    parts.push(o.concept
-      ? `<div class="hello"><h2>Quelle interface veux-tu imaginer ?</h2><p>Decris-la : l'IA la construit avec les composants du depot minimal, remplit tout avec de fausses donnees et te la montre ici, interactive. Rien n'est pousse sur GitHub.</p></div>`
-      : `<div class="hello"><h2>Que veux-tu faire ?</h2><p>L'IA travaille sur la branche de ce chat, commite ses changements et les pousse sur GitHub.</p></div>`)
+    parts.push(`<div class="hello"><h2>Que veux-tu faire ?</h2>
+      <p>Discute, demande une <strong>idee d'interface</strong> (l'IA te propose un visuel dans son atelier, tu valides avant qu'elle l'integre) ou une <strong>modification du projet</strong> (elle ouvre sa branche et te montre le resultat).</p></div>`)
   }
   for (const m of o.messages) {
     parts.push(m.role === 'user'
@@ -144,7 +135,7 @@ export function threadHtml(o: { messages: ChatMessage[]; events: Map<number, Job
 
 export interface ChatPageData {
   project: Project; chats: Chat[]; chat: Chat | null; messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>
-  hasRepo: boolean; noWorker: boolean; pending: boolean; error?: string
+  hasProjectRepo: boolean; noWorker: boolean; pending: boolean; error?: string
 }
 
 export function chatPage(o: Viewer & ChatPageData) {
@@ -168,7 +159,9 @@ export function chatPage(o: Viewer & ChatPageData) {
       <header class="chat-head">
         <div class="ttl">
           <h1>${esc(c.title)}</h1>
-          <div class="meta">${c.mode === 'concept' ? '<span class="chip accent" title="Depot minimal, rien n\'est pousse sur GitHub">Maquette UI</span>' : ''}<span class="chip" title="Branche git de ce chat">${I.branch}${esc(c.branch)}</span>${c.worker_name ? `<span class="chip" title="Worker qui detient ce chat">${I.worker}${esc(c.worker_name)}</span>` : ''}</div>
+          <div class="meta">${c.branch_open
+            ? `<span class="chip" title="Branche de travail du projet, ouverte par l'IA">${I.branch}${esc(c.branch)}</span>`
+            : '<span class="chip accent" title="Dossier libre de ce chat : l\'IA y discute et y imagine des interfaces. Aucune branche, rien n\'est pousse sur GitHub tant que le projet n\'est pas modifie.">Atelier</span>'}${c.worker_name ? `<span class="chip" title="Worker qui detient ce chat">${I.worker}${esc(c.worker_name)}</span>` : ''}</div>
         </div>
         <div class="tools">
           <button class="ghost toggle-list" type="button" data-toggle-list>Chats</button>
@@ -179,25 +172,25 @@ export function chatPage(o: Viewer & ChatPageData) {
                 <button type="submit">Enregistrer</button>
               </form>
               <hr>
-              <p class="muted small">Supprime le chat de ce site. La branche <code>${esc(c.branch)}</code> reste sur GitHub.</p>
+              <p class="muted small">Supprime le chat de ce site.${c.branch_open ? ` La branche <code>${esc(c.branch)}</code> reste sur GitHub.` : " Son atelier est supprime du Worker au prochain nettoyage."}</p>
               <form method="post" action="${base}/delete">${csrfField(o.csrf)}<button class="danger" type="submit">Supprimer ce chat</button></form>
             </div>
           </details>
         </div>
       </header>
-      <div class="messages" id="messages">${threadHtml({ messages: o.messages, events: o.events, previews: o.previews, hasRepo: o.hasRepo, noWorker: o.noWorker, workerName: c.worker_name, concept: c.mode === 'concept' })}</div>
+      <div class="messages" id="messages">${threadHtml({ messages: o.messages, events: o.events, previews: o.previews, noWorker: o.noWorker, workerName: c.worker_name })}</div>
       <div class="composer-wrap">
         <div class="composer-error" id="composer-error">${alert(o.error)}</div>
         <form class="composer" id="composer" method="post" action="${base}/messages" autocomplete="off">
           ${csrfField(o.csrf)}
           <label class="sr" for="prompt">Message</label>
-          <textarea id="prompt" name="prompt" rows="1" maxlength="${MAX_PROMPT}" required placeholder="Decris ce que l'IA doit faire…"${o.pending || !o.hasRepo ? ' disabled' : ''}></textarea>
+          <textarea id="prompt" name="prompt" rows="1" maxlength="${MAX_PROMPT}" required placeholder="Pose une question, decris une interface a imaginer, ou demande une modification du projet…"${o.pending ? ' disabled' : ''}></textarea>
           <div class="composer-bar">
             ${select('model', 'Modele', MODELS, c.model)}
             ${select('effort', 'Effort de reflexion', EFFORTS, c.effort)}
             <span class="spacer"></span>
             <span class="hintline">Entree pour envoyer · Maj+Entree : nouvelle ligne</span>
-            <button class="send primary" type="submit" aria-label="Envoyer"${o.pending || !o.hasRepo ? ' disabled' : ''}>${I.send}</button>
+            <button class="send primary" type="submit" aria-label="Envoyer"${o.pending ? ' disabled' : ''}>${I.send}</button>
             <button class="stop danger" type="submit" formaction="${base}/cancel" formnovalidate>Arreter</button>
           </div>
         </form>

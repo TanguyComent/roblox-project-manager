@@ -111,13 +111,14 @@ Voir [`../worker/README.md`](../worker/README.md) pour lancer un Worker.
 
 ## Chats IA
 
-Chaque projet a ses **chats IA** (page *Projets → un projet → Chats IA*) : creer, ouvrir, supprimer. Un chat = **une branche git dediee** (`ai/chat-<n>-<titre>`) + une conversation Claude Code.
-Envoyer un message cree une tache `ai.chat` pour un de tes Workers qui a **Git et Claude Code** (outils detectes, voir ci-dessus) ; le Worker prepare le dossier de la branche, lance
-`claude -p`, commite, pousse la branche, et renvoie la reponse, les commits et le diff, que le Host **stocke** dans le chat. Les messages suivants retournent sur le meme Worker et reprennent
-la meme conversation ; si ce Worker est supprime, un autre prend le relais (nouvelle conversation, meme branche, le travail pousse est retrouve).
+Chaque projet a ses **chats IA** (page *Projets > un projet > Chats IA*) : creer, ouvrir, renommer, supprimer. Un chat est cree **sans branche ni depot** : il travaille dans un **atelier** (dossier libre sur le Worker,
+copie du depot de maquette choisi dans Compte > GitHub, jamais pousse) et l'IA ne touche au projet que **si elle doit le modifier** : elle ouvre alors elle-meme la branche du chat (`ai/chat-<n>-<titre>`) par un
+outil du Worker. Envoyer un message cree une tache `ai.chat` pour un de tes Workers qui a **Git et Claude Code** (outils detectes, voir ci-dessus) ; le Worker lance `claude -p` dans l'atelier et renvoie la reponse,
+les commits et le diff de la branche (s'il y en a une), que le Host **stocke** dans le chat. Les messages suivants retournent sur le meme Worker et reprennent la meme conversation ; si ce Worker est supprime,
+un autre prend le relais (nouvelle conversation, meme branche : le travail pousse est retrouve). Details du fonctionnement et des outils de l'IA : [`../ui-framework/README.md`](../ui-framework/README.md).
 
-- Le projet doit avoir un **depot GitHub** ; il est clone par le Worker avec l'authentification de la machine (gestionnaire d'identifiants git ou cle ssh).
-- Une reponse a la fois par chat ; elle peut etre annulee (le processus Claude est arrete). Supprimer un chat arrete sa reponse en cours ; la branche reste sur GitHub.
+- Un projet **sans depot GitHub** marche aussi (l'IA n'a que son atelier) ; sinon le depot est clone par le Worker avec l'authentification de la machine (gestionnaire d'identifiants git ou cle ssh), a la premiere demande de l'IA.
+- Une reponse a la fois par chat ; elle peut etre annulee (le processus Claude est arrete). Supprimer un chat arrete sa reponse en cours ; sa branche (si elle a ete ouverte) reste sur GitHub, son atelier est nettoye sur le Worker apres 30 jours d'inactivite.
 - Une tache peut exiger des outils (`requires`) : elle ne part que sur un Worker qui les a, et attend sinon (un outil detecte plus tard la debloque).
 - Les reponses de l'IA sont rendues en Markdown **echappe** (jamais de HTML venant de l'IA) ; une page de chat ne contient aucun script en ligne (CSP stricte).
 - **Interface** (dans l'esprit de Claude Code) : liste des chats a gauche avec une pastille par chat (en cours, en attente d'un Worker, reponse non lue, echec), conversation a droite avec
@@ -128,4 +129,4 @@ la meme conversation ; si ce Worker est supprime, un autre prend le relais (nouv
 
 L'IA peut **montrer une interface** : elle termine sa reponse par un bloc ```rpm-ui (format et trajet complets dans [`../ui-framework/README.md`](../ui-framework/README.md)). Le Worker construit l'apercu de la story avec l'emulateur et l'envoie au Host (`POST /api/worker/previews`, jeton du Worker) ; le chat l'affiche, **interactif**, dans un `<iframe sandbox="allow-scripts">` sans `allow-same-origin` (voir `src/preview-routes.ts` pour le modele de securite). Les paquets sont stockes dans `DATA_DIR/previews/` et supprimes avec le chat ; quotas : 12 Mo par apercu, 500 Mo par utilisateur.
 
-Le bouton **Maquette UI** cree un chat sans depot GitHub : il part du **depot de maquette choisi dans Compte > GitHub > « Depot de maquette UI »** (depot puis branche, parmi ceux du compte GitHub connecte, comme le template des nouveaux projets), clone par le Worker dans un dossier propre au chat, jamais pousse ; l'IA y remplit tout avec de fausses donnees. Sans choix, le chat l'indique et refuse l'envoi. `UI_TEMPLATE_REPO` (facultatif, aucun par defaut) fournit un depot par defaut a l'echelle de l'instance pour qui n'a rien choisi. Le jeton GitHub n'est jamais envoye au Worker : il clone avec les identifiants git de sa machine.
+Les **concepts** (idees, maquettes, UI de zero) se font dans l'atelier du chat, avec de fausses donnees : l'IA les montre (carte etiquetee « Atelier »), puis **attend ta validation** avant de les integrer au projet. Si tu lui demandes directement de coder ou de modifier quelque chose, elle ouvre sa branche sans rien demander. Le **depot de maquette** se choisit dans Compte > GitHub > « Depot de maquette UI » (depot puis branche parmi ceux du compte connecte, comme le template des nouveaux projets) ; `UI_TEMPLATE_REPO` (facultatif, aucun par defaut) fournit un depot par defaut a l'echelle de l'instance. Sans depot de maquette l'atelier est vide. Le jeton GitHub n'est jamais envoye au Worker : il clone avec les identifiants git de sa machine.

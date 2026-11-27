@@ -10,7 +10,11 @@ export const VIEWPORTS = ['UI Labs', 'Desktop', 'Tablette', 'Telephone'] as cons
 export const DEFAULT_EMULATOR_DIR = join(WORKER_DIR, '..', 'ui-emulator')
 export const MAX_BLOCKS = 6
 
-export interface UiBlock { n: number; file: string; viewport: string; title: string }
+/** Ou vit la story : `project` (depot du projet, branche du chat) ou `sandbox` (depot de maquette du chat : concepts, fausses donnees, jamais pousse). */
+export type UiRoot = 'project' | 'sandbox'
+export const ROOTS: readonly UiRoot[] = ['project', 'sandbox']
+
+export interface UiBlock { n: number; file: string; viewport: string; title: string; root: UiRoot }
 export interface InvalidBlock { n: number; error: string }
 
 // Un bloc : ```rpm-ui puis un objet JSON {"file": "...story.tsx", "viewport": "Telephone", "title": "..."} puis ```.
@@ -48,8 +52,10 @@ export function parseUiBlocks(text: string): { blocks: UiBlock[]; invalid: Inval
     if (problem) { invalid.push({ n: i, error: problem }); continue }
     const viewport = o.viewport === undefined ? 'UI Labs' : typeof o.viewport === 'string' && (VIEWPORTS as readonly string[]).includes(o.viewport) ? o.viewport : null
     if (viewport === null) { invalid.push({ n: i, error: `viewport inconnu (attendu : ${VIEWPORTS.join(', ')})` }); continue }
+    const root = o.root === undefined ? 'project' : (ROOTS as readonly unknown[]).includes(o.root) ? (o.root as UiRoot) : null
+    if (root === null) { invalid.push({ n: i, error: `racine inconnue (attendu : ${ROOTS.join(' ou ')})` }); continue }
     const title = typeof o.title === 'string' ? o.title.replace(/[\r\n\u0000-\u001f]/g, ' ').trim().slice(0, 80) : ''
-    blocks.push({ n: i, file, viewport, title: title || file.split('/').pop()!.replace(/\.story\.tsx?$/, '') })
+    blocks.push({ n: i, file, viewport, root, title: title || file.split('/').pop()!.replace(/\.story\.tsx?$/, '') })
   }
   return { blocks, invalid }
 }
@@ -63,12 +69,14 @@ export function fileProblem(file: string): string | null {
   return null
 }
 
-export interface PreviewMeta { n: number; title: string; file: string; viewport: string; ok: boolean; error: string | null; checked: boolean; nodes: number; errors: string[]; missing: string[] }
+export interface PreviewMeta { n: number; title: string; file: string; viewport: string; root: UiRoot; ok: boolean; error: string | null; checked: boolean; nodes: number; errors: string[]; missing: string[] }
 export interface PreviewResult extends PreviewMeta { previewId: string | null }
 
 export interface BuildOptions {
-  /** Racine du depot (dossier de travail de la branche). */
-  project: string
+  /** Racine du projet (dossier de travail de la branche, ou copie en lecture seule) ; absente : pas de projet disponible. */
+  project?: string
+  /** Dossier du depot de maquette de ce chat, s'il y en a un (blocs `root: "sandbox"`). */
+  sandbox?: string
   emulatorDir?: string
   /** Envoie un paquet (dossier) au Host ; renvoie l'identifiant de l'apercu. Sans dossier : ne depose que les metadonnees (apercu en echec). */
   upload: (dir: string | null, meta: PreviewMeta) => Promise<string>
@@ -93,8 +101,8 @@ export async function buildPreviews(text: string, o: BuildOptions): Promise<Prev
   const { blocks, invalid } = parseUiBlocks(text)
   const emulatorDir = o.emulatorDir ?? DEFAULT_EMULATOR_DIR
   const results: PreviewResult[] = []
-  const meta = (b: { n: number; file?: string; viewport?: string; title?: string }, error: string | null, extra: Partial<PreviewMeta> = {}): PreviewMeta => ({
-    n: b.n, title: b.title ?? '', file: b.file ?? '', viewport: b.viewport ?? 'UI Labs', ok: error === null, error, checked: false, nodes: 0, errors: [], missing: [], ...extra,
+  const meta = (b: { n: number; file?: string; viewport?: string; title?: string; root?: UiRoot }, error: string | null, extra: Partial<PreviewMeta> = {}): PreviewMeta => ({
+    n: b.n, title: b.title ?? '', file: b.file ?? '', viewport: b.viewport ?? 'UI Labs', root: b.root ?? 'project', ok: error === null, error, checked: false, nodes: 0, errors: [], missing: [], ...extra,
   })
 
   for (const bad of invalid) {
@@ -110,10 +118,16 @@ export async function buildPreviews(text: string, o: BuildOptions): Promise<Prev
   }
 
   for (const b of blocks) {
-    o.event('info', `Apercu : ${b.file}`)
+    const projectDir = b.root === 'sandbox' ? o.sandbox : o.project
+    if (!projectDir) {
+      const m = meta(b, "le depot de maquette de ce chat n'est pas disponible")
+      results.push({ ...m, previewId: await o.upload(null, m).catch(() => null) })
+      continue
+    }
+    o.event('info', `Apercu : ${b.file}${b.root === 'sandbox' ? ' (maquette)' : ''}`)
     const out = mkdtempSync(join(tmpdir(), 'rpm-prev-'))
     try {
-      const r = await runTool(emulatorDir, ['--project', o.project, '--file', b.file, '--out', join(out, 'bundle'), '--viewport', b.viewport], o.signal)
+      const r = await runTool(emulatorDir, ['--project', projectDir, '--file', b.file, '--out', join(out, 'bundle'), '--viewport', b.viewport], o.signal)
       if (o.signal.aborted) break
       if (!r.ok) {
         const m = meta(b, r.error ?? 'construction impossible')
@@ -129,6 +143,28 @@ export async function buildPreviews(text: string, o: BuildOptions): Promise<Prev
     } finally { rmSync(out, { recursive: true, force: true }) }
   }
   return results.sort((a, b) => a.n - b.n)
+}
+
+export interface RenderResult { ok: boolean; error?: string; png?: Buffer; nodes: number; errors: string[]; missing: string[] }
+
+/**
+ * « Photo » d'une story : la construit, la rend dans un navigateur sans fenetre et renvoie la capture (PNG) avec les erreurs et modules manquants.
+ * C'est ce que l'outil `ui_preview` donne a l'IA pour VOIR ce qu'elle construit (voir mcp-ui.ts).
+ */
+export async function renderStory(o: { emulatorDir?: string; project: string; file: string; viewport?: string; signal: AbortSignal }): Promise<RenderResult> {
+  const emulatorDir = o.emulatorDir ?? DEFAULT_EMULATOR_DIR
+  const fail = (error: string): RenderResult => ({ ok: false, error, nodes: 0, errors: [], missing: [] })
+  const problem = fileProblem(o.file)
+  if (problem) return fail(problem)
+  if (!existsSync(join(emulatorDir, 'tools', 'preview.mjs'))) return fail("l'emulateur d'UI n'est pas installe sur ce Worker (dossier ui-emulator)")
+  const out = mkdtempSync(join(tmpdir(), 'rpm-shot-'))
+  try {
+    const r = await runTool(emulatorDir, ['--project', o.project, '--file', o.file, '--out', join(out, 'bundle'), '--viewport', o.viewport ?? 'UI Labs'], o.signal)
+    if (!r.ok) return fail(r.error ?? 'construction impossible')
+    const png = join(out, 'bundle', 'thumb.png')
+    if (!r.checked || !existsSync(png)) return { ...fail('aucun navigateur (Edge ou Chrome) sur ce Worker : impossible de prendre une capture'), nodes: r.nodes ?? 0, errors: r.errors ?? [], missing: r.missing ?? [] }
+    return { ok: true, png: readFileSync(png), nodes: r.nodes ?? 0, errors: r.errors ?? [], missing: r.missing ?? [] }
+  } finally { rmSync(out, { recursive: true, force: true }) }
 }
 
 /** Resume pour l'IA des apercus a corriger (vide si tout va bien). Les modules « manquants » ne sont pas des erreurs : l'emulateur les remplace. */

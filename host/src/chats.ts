@@ -7,14 +7,12 @@ import { getJob, type EventKind, type JobEvent, type JobStatus } from './workers
 /** Etat d'un chat dans la liste : reponse en cours, en attente d'un Worker, reponse non lue, echec non lu, ou rien a signaler. */
 export type ChatState = 'running' | 'queued' | 'unread' | 'error' | 'idle'
 
-export type ChatMode = 'project' | 'concept'
-
 export interface Chat {
   id: number; project_id: number; title: string; branch: string; session_id: string | null
   worker_id: number | null; worker_name: string | null; created_at: number; updated_at: number; message_count: number
   model: string | null; effort: string | null; seen_message_id: number
-  /** project : travaille sur le depot GitHub du projet ; concept : maquette d'interface dans un depot minimal (rien n'est pousse). */
-  mode: ChatMode
+  /** La branche de travail du projet a-t-elle ete ouverte ? Tant que non, le chat n'a que son atelier (aucune branche, aucun depot). */
+  branch_open: boolean
   state: ChatState
 }
 export interface ChatDetails {
@@ -30,7 +28,6 @@ export interface ChatMessage {
 export const MAX_TITLE = 80
 export const MAX_PROMPT = 20_000
 export const DEFAULT_TITLE = 'Nouveau chat'
-export const CONCEPT_TITLE = 'Nouvelle maquette'
 
 /** Choix proposes a l'utilisateur (la valeur vide = reglage par defaut du CLI). */
 export const MODELS: { value: string; label: string }[] = [
@@ -45,7 +42,7 @@ export const modelOk = (v: string) => MODELS.some((m) => m.value === v)
 export const effortOk = (v: string) => EFFORTS.some((m) => m.value === v)
 
 const CHAT_SELECT = `SELECT c.id, c.project_id, c.title, c.branch, c.session_id, c.worker_id, w.name AS worker_name, c.created_at, c.updated_at,
-  c.model, c.effort, c.seen_message_id, c.mode,
+  c.model, c.effort, c.seen_message_id, c.branch_open,
   (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count,
   (SELECT m.id FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_id,
   (SELECT m.status FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_status,
@@ -53,10 +50,11 @@ const CHAT_SELECT = `SELECT c.id, c.project_id, c.title, c.branch, c.session_id,
      WHERE m.chat_id = c.id AND m.status = 'pending' ORDER BY m.id DESC LIMIT 1) AS pending_job_status
   FROM chats c LEFT JOIN workers w ON w.id = c.worker_id`
 
-type ChatRow = Omit<Chat, 'state'> & { last_done_id: number | null; last_done_status: string | null; pending_job_status: string | null }
+type ChatRow = Omit<Chat, 'state' | 'branch_open'> & { branch_open: number; last_done_id: number | null; last_done_status: string | null; pending_job_status: string | null }
 
 function toChat(r: ChatRow): Chat {
-  const { last_done_id, last_done_status, pending_job_status, ...chat } = r
+  const { last_done_id, last_done_status, pending_job_status, branch_open, ...rest } = r
+  const chat = { ...rest, branch_open: !!branch_open }
   let state: ChatState = 'idle'
   if (pending_job_status === 'running') state = 'running'
   else if (pending_job_status === 'queued') state = 'queued'
@@ -84,9 +82,9 @@ export function titleProblem(title: string): string | null {
 const branchFor = (id: number, title: string) => `ai/chat-${id}-${slugify(title).slice(0, 30).replace(/-+$/, '') || 'chat'}`
 
 // Chaque chat a sa branche : « ai/chat-<id>-<titre> » (le numero la rend unique et stable, meme si deux chats ont le meme titre).
-export function createChat(db: Db, projectId: number, title: string = DEFAULT_TITLE, mode: ChatMode = 'project'): Chat {
+export function createChat(db: Db, projectId: number, title: string = DEFAULT_TITLE): Chat {
   const now = Date.now()
-  const r = db.prepare("INSERT INTO chats (project_id, title, branch, mode, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?)").run(projectId, title, mode, now, now)
+  const r = db.prepare("INSERT INTO chats (project_id, title, branch, created_at, updated_at) VALUES (?, ?, '', ?, ?)").run(projectId, title, now, now)
   const id = Number(r.lastInsertRowid)
   db.prepare('UPDATE chats SET branch = ? WHERE id = ?').run(branchFor(id, title), id)
   return getChat(db, projectId, id)!
@@ -97,7 +95,7 @@ export const renameChat = (db: Db, projectId: number, id: number, title: string)
 
 /** Premier message d'un chat encore intitule « Nouveau chat » : le titre (et la branche, pas encore utilisee) en sont deduits. */
 export function titleFromFirstMessage(db: Db, chat: Chat, prompt: string) {
-  if ((chat.title !== DEFAULT_TITLE && chat.title !== CONCEPT_TITLE) || chat.message_count > 0) return
+  if (chat.title !== DEFAULT_TITLE || chat.message_count > 0) return
   const first = prompt.split('\n').find((l) => l.trim())?.trim().replace(/\s+/g, ' ') ?? ''
   const title = first.length > 60 ? `${first.slice(0, 59).trimEnd()}…` : first
   if (!title || titleProblem(title)) return
@@ -181,8 +179,8 @@ export function syncChat(db: Db, userId: number, chatId: number) {
       const text = typeof r.text === 'string' ? r.text : ''
       db.prepare("UPDATE chat_messages SET status = 'done', content = ?, details_json = ? WHERE id = ?").run(text || '(reponse vide)', JSON.stringify(pick(r)).slice(0, 60_000), m.id)
       // La conversation Claude et le dossier de travail vivent sur CE Worker : les messages suivants y retournent.
-      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ? WHERE id = ?')
-        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), chatId)
+      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ?, branch_open = CASE WHEN ? THEN 1 ELSE branch_open END WHERE id = ?')
+        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), typeof r.branch === 'string' && r.branch ? 1 : 0, chatId)
     } else {
       db.prepare('UPDATE chat_messages SET status = ?, content = ? WHERE id = ?')
         .run(job.status === 'cancelled' ? 'cancelled' : 'failed', job.error ?? (job.status === 'cancelled' ? 'Annulee.' : 'La tache a echoue.'), m.id)
