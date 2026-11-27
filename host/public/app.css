@@ -451,3 +451,13 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .rbx-form select { min-width: 0; }
 .lib-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; font-size: 13px; color: var(--text2); }
 .lib-settings label { display: flex; align-items: center; gap: 6px; }
+
+.lib-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.lib-search input[type=search] { flex: 1 1 260px; min-width: 0; }
+.lib-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 22px 0 8px; }
+.lib-pages a, .lib-pages .cur { min-width: 32px; padding: 5px 10px; text-align: center; font-size: 13px; text-decoration: none; color: var(--text2); background: var(--surface3); border: 1px solid var(--line2); border-radius: 8px; }
+.lib-pages a:hover { color: var(--text); border-color: var(--accent); }
+.lib-pages .cur { color: var(--accent); border-color: var(--accent); }
+.lib-pages .gap { color: var(--muted); }
+.lib-pages > .muted { margin-right: auto; }
+.lib-count { margin: 18px 0 8px; }

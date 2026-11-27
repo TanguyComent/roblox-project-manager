@@ -29,6 +29,8 @@ interface Ctx {
   requireFull: (c: Context) => Auth | Response
 }
 
+const pageOf = (c: Context) => Math.max(1, Math.min(100000, Number.parseInt(c.req.query('p') ?? '1', 10) || 1))
+const queryOf = (c: Context) => (c.req.query('q') ?? '').slice(0, 100)
 const wantsJson = (c: Context) => (c.req.header('accept') ?? '').includes('application/json')
 const asciiName = (n: string) => n.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
 
@@ -47,7 +49,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     const a = requireFull(c)
     if (a instanceof Response) return a
     await syncPublishing(db, roblox, a.user.id).catch(() => 0)
-    return html(c, libraryPage({ ...viewer(a), ...state(a), group: groupOf(c.req.query('group')) }))
+    return html(c, libraryPage({ ...viewer(a), ...state(a), group: groupOf(c.req.query('group')), page: pageOf(c), q: queryOf(c) }))
   })
 
   app.get('/library/live', async (c) => {
@@ -56,7 +58,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     await syncPublishing(db, roblox, a.user.id).catch(() => 0)
     const s = state(a)
     c.header('Cache-Control', 'no-store')
-    return c.json({ html: libraryGridHtml(s.images, a.session.csrf, groupOf(c.req.query('group')), s.targets), counts: s.counts, error: s.error ?? null })
+    return c.json({ html: libraryGridHtml(s.images, a.session.csrf, { group: groupOf(c.req.query('group')), targets: s.targets, page: pageOf(c), q: queryOf(c) }), counts: s.counts, error: s.error ?? null })
   })
 
   // Televersement : corps brut, nom dans X-File-Name, jeton CSRF dans X-CSRF.
@@ -110,7 +112,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
       'Content-Security-Policy': "default-src 'none'; sandbox",
       'X-Content-Type-Options': 'nosniff',
       'Cross-Origin-Resource-Policy': 'same-origin',
-      'Cache-Control': 'private, max-age=3600',
+      'Cache-Control': 'private, max-age=86400, immutable', // le contenu d'un identifiant ne change jamais
     })
   })
 

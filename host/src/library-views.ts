@@ -31,7 +31,7 @@ const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = []) => 
     sorted && img.subject ? `<span class="chip subject">${esc(img.subject)}</span>` : '',
   ].join('')
   return `<article class="lib-card" id="i${img.id}">
-  <a class="lib-thumb" href="/library/${img.id}/file" target="_blank" rel="noopener"><img src="/library/${img.id}/file" alt="${esc(img.description || img.file_name)}" loading="lazy"></a>
+  <a class="lib-thumb" href="/library/${img.id}/file" target="_blank" rel="noopener"><img src="/library/${img.id}/file" alt="${esc(img.description || img.file_name)}" loading="lazy" decoding="async"></a>
   <div class="lib-meta">
     <div class="lib-title"><strong>${esc(sorted ? img.title : img.file_name)}</strong>${status}</div>
     ${facts ? `<div class="facts">${facts}</div>` : ''}
@@ -59,27 +59,72 @@ const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = []) => 
 </article>`
 }
 
-/** Contenu de la grille (renvoye tel quel par /library/live). `group` : la facette qui regroupe les images triees. */
-export function libraryGridHtml(images: LibraryImage[], csrf: string, group: Group = 'scope', targets: TargetOption[] = []): string {
+export const PAGE_SIZE = 48
+
+export interface GridOptions { group?: Group; targets?: TargetOption[]; page?: number; q?: string }
+
+const norm = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+/** Une image correspond si TOUS les mots de la recherche apparaissent dans son nom, sa description, ses mots-cles, son style, son sujet, son scope, ses couleurs ou sa provenance. */
+export function matches(img: LibraryImage, q: string): boolean {
+  const words = norm(q).split(/[^a-z0-9]+/).filter(Boolean)
+  if (!words.length) return true
+  const hay = norm([img.file_name, img.title, img.description, img.tags, img.style, img.traits, img.subject, img.scope, img.colors, img.origin, img.hint].join(' '))
+  return words.every((w) => hay.includes(w))
+}
+
+const pageLink = (o: { group: Group; q: string }, p: number) => `/library?group=${o.group}${o.q ? `&q=${encodeURIComponent(o.q)}` : ''}${p > 1 ? `&p=${p}` : ''}`
+
+function pager(o: { group: Group; q: string }, page: number, pages: number, total: number): string {
+  if (pages <= 1) return `<p class="muted small lib-count">${total} image(s)</p>`
+  const nums = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2].filter((n) => n >= 1 && n <= pages))
+  const items: string[] = []
+  let last = 0
+  for (const n of [...nums].sort((a, b) => a - b)) {
+    if (n - last > 1) items.push('<span class="gap">…</span>')
+    items.push(n === page ? `<span class="cur" aria-current="page">${n}</span>` : `<a href="${pageLink(o, n)}">${n}</a>`)
+    last = n
+  }
+  return `<nav class="lib-pages" aria-label="Pages"><span class="muted small">${total} image(s) · ${PAGE_SIZE} par page</span>${page > 1 ? `<a href="${pageLink(o, page - 1)}">‹ Precedente</a>` : ''}${items.join('')}${page < pages ? `<a href="${pageLink(o, page + 1)}">Suivante ›</a>` : ''}</nav>`
+}
+
+/** Contenu de la grille (renvoye tel quel par /library/live). Une page (48 images) a la fois : le navigateur ne charge que celles-la, jamais toute la bibliotheque. */
+export function libraryGridHtml(images: LibraryImage[], csrf: string, opts: GridOptions = {}): string {
+  const group = opts.group ?? 'scope'
+  const targets = opts.targets ?? []
+  const q = (opts.q ?? '').trim().slice(0, 100)
   if (!images.length) return '<div class="hello"><h2>Ta bibliotheque est vide</h2><p>Ajoute des images (icones, fonds, personnages...) : une IA les decrira (scope, style, sujet, couleurs) pour que les agents qui construisent tes interfaces puissent les retrouver.</p></div>'
-  const waiting = images.filter((i) => i.status !== 'sorted')
-  const sorted = images.filter((i) => i.status === 'sorted')
-  const parts: string[] = []
-  if (waiting.length) parts.push(`<section><h2>En attente <span class="count">${waiting.length}</span></h2><div class="lib-grid">${waiting.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
+  const shown = q ? images.filter((i) => matches(i, q)) : images
+  if (!shown.length) return `<div class="hello"><h2>Aucune image ne correspond</h2><p>Rien pour « ${esc(q)} ». <a href="/library?group=${group}">Voir toute la bibliotheque</a></p></div>`
   const key = (i: LibraryImage) => i[group] || '(non defini)'
-  const names = [...new Set(sorted.map(key))].sort()
-  for (const n of names) {
-    const list = sorted.filter((i) => key(i) === n)
+  const waiting = shown.filter((i) => i.status !== 'sorted')
+  const sorted = shown.filter((i) => i.status === 'sorted').sort((a, b) => key(a).localeCompare(key(b)) || a.title.localeCompare(b.title))
+  const ordered = [...waiting, ...sorted]
+  const pages = Math.max(1, Math.ceil(ordered.length / PAGE_SIZE))
+  const page = Math.min(Math.max(1, Math.floor(opts.page ?? 1) || 1), pages)
+  const slice = ordered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const totals = new Map<string, number>()
+  for (const i of sorted) totals.set(key(i), (totals.get(key(i)) ?? 0) + 1)
+
+  const parts: string[] = []
+  const wslice = slice.filter((i) => i.status !== 'sorted')
+  if (wslice.length) parts.push(`<section><h2>En attente <span class="count">${waiting.length}</span></h2><div class="lib-grid">${wslice.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
+  const runs: { name: string; list: LibraryImage[] }[] = []
+  for (const i of slice.filter((x) => x.status === 'sorted')) {
+    const last = runs.at(-1)
+    if (last && last.name === key(i)) last.list.push(i); else runs.push({ name: key(i), list: [i] })
+  }
+  for (const { name: n, list } of runs) {
     const rename = n === '(non defini)' ? '' : `<details class="lib-rename"><summary>Renommer / fusionner</summary>
       <form method="post" action="/library/rename">${csrfField(csrf)}<input type="hidden" name="facet" value="${group}"><input type="hidden" name="from" value="${esc(n)}">
         <input type="text" name="to" maxlength="40" value="${esc(n)}" aria-label="Nouveau nom" required><button type="submit">Renommer</button></form>
       <p class="muted small">Un nom deja existant fusionne les deux groupes.</p></details>`
-    parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
+    parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${totals.get(n) ?? list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
   }
-  return parts.join('\n')
+  const nav = pager({ group, q }, page, pages, ordered.length)
+  return `${parts.join('\n')}\n${nav}`
 }
 
-export interface LibraryPageData { images: LibraryImage[]; counts: { pending: number; sorting: number; sorted: number }; error?: string; noWorker: boolean; group: Group; autoPublish: boolean; targets: TargetOption[] }
+export interface LibraryPageData { images: LibraryImage[]; counts: { pending: number; sorting: number; sorted: number }; error?: string; noWorker: boolean; group: Group; autoPublish: boolean; targets: TargetOption[]; page?: number; q?: string }
 
 export function libraryPage(o: Viewer & LibraryPageData) {
   const busy = o.counts.sorting > 0
@@ -99,10 +144,11 @@ export function libraryPage(o: Viewer & LibraryPageData) {
     <label><input type="checkbox" name="auto_publish" value="1"${o.autoPublish ? ' checked' : ''}> Publier automatiquement sur Roblox les images utilisees quand une IA integre un concept valide dans un projet</label>
     <button type="submit">Enregistrer</button>
   </form>
-  <nav class="lib-tabs" aria-label="Vue">${GROUPS.map((g) => `<a href="/library?group=${g.id}"${g.id === o.group ? ' class="active" aria-current="page"' : ''}>${g.label}</a>`).join('')}</nav>
+  <form method="get" action="/library" class="lib-search" role="search"><input type="hidden" name="group" value="${o.group}"><input type="search" name="q" value="${esc(o.q ?? '')}" maxlength="100" placeholder="Rechercher (nom, sujet, style, couleur, mot-cle...)" aria-label="Rechercher dans la bibliotheque"><button type="submit">Rechercher</button>${o.q ? `<a href="/library?group=${o.group}">Effacer</a>` : ''}</form>
+  <nav class="lib-tabs" aria-label="Vue">${GROUPS.map((g) => `<a href="/library?group=${g.id}${o.q ? `&q=${encodeURIComponent(o.q)}` : ''}"${g.id === o.group ? ' class="active" aria-current="page"' : ''}>${g.label}</a>`).join('')}</nav>
   <div id="lib-error">${alert(o.error)}</div>
   ${o.noWorker && (o.counts.pending || busy) ? alert("Aucun Worker connecte ne dispose de Claude Code : le tri attendra qu'il y en ait un.") : ''}
   <div class="lib-drop" id="lib-drop" hidden>Depose tes images pour les ajouter</div>
-  <div id="lib-grid">${libraryGridHtml(o.images, o.csrf, o.group, o.targets)}</div>
+  <div id="lib-grid">${libraryGridHtml(o.images, o.csrf, { group: o.group, targets: o.targets, page: o.page, q: o.q })}</div>
 </div>`, { scripts: ['library.js'] })
 }

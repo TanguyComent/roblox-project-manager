@@ -315,3 +315,35 @@ test('dimensions lues dans les octets, ratio, renommage et fusion d une facette'
   assert.match(page, /cartoon-final/)
   assert.match((await t.c.call('GET', '/library?group=subject')).text, /Par sujet/)
 })
+test('pagination : 48 images par page, recherche, page hors limites, suivi en direct borne a la page', async () => {
+  const t = await setup()
+  const ins = t.c.db.prepare("INSERT INTO library_images (id, user_id, file_name, title, mime, size, sha256, status, scope, style, subject, description, created_at) VALUES (?, ?, ?, ?, 'image/png', 10, ?, ?, ?, ?, ?, ?, ?)")
+  for (let i = 0; i < 130; i++) {
+    const pending = i < 10
+    ins.run(String(i).padStart(32, '0'), t.userId, `img${i}.png`, `img-${i}`, String(i).padStart(64, '0'), pending ? 'pending' : 'sorted', pending ? '' : i % 2 ? 'icon' : 'background', i % 3 ? 'cartoon-a' : 'pixel-b', i === 77 ? 'pendule' : 'autre', i === 77 ? 'Un pendule ancien' : 'Une image', i)
+  }
+  const cards = (html: string) => (html.match(/class="lib-card"/g) ?? []).length
+  const p1 = (await t.c.call('GET', '/library')).text
+  assert.equal(cards(p1), 48, 'une page seulement')
+  assert.equal((p1.match(/<img src="\/library\//g) ?? []).length, 48, 'le navigateur ne recoit que 48 images')
+  assert.match(p1, /130 image\(s\) · 48 par page/)
+  assert.match(p1, /href="\/library\?group=scope&p=2"/)
+  assert.match(p1, /En attente <span class="count">10<\/span>/)
+  assert.equal(cards((await t.c.call('GET', '/library?p=2')).text), 48)
+  assert.equal(cards((await t.c.call('GET', '/library?p=3')).text), 34)
+  assert.equal(cards((await t.c.call('GET', '/library?p=999')).text), 34, 'page hors limites : derniere page')
+  assert.equal(cards((await t.c.call('GET', '/library?p=abc')).text), 48)
+  assert.equal(cards((await t.c.call('GET', '/library?p=-4')).text), 48)
+  const found = (await t.c.call('GET', '/library?q=pendule')).text
+  assert.equal(cards(found), 1)
+  assert.match(found, /Un pendule ancien/)
+  assert.equal(cards((await t.c.call('GET', '/library?q=PENDULE+ancien')).text), 1, 'tous les mots, sans accents ni casse')
+  assert.match((await t.c.call('GET', '/library?q=zzzz')).text, /Aucune image ne correspond/)
+  assert.doesNotMatch((await t.c.call('GET', `/library?q=${encodeURIComponent('"><script>x</script>')}`)).text, /<script>x<\/script>/)
+  const live = JSON.parse((await t.c.call('GET', '/library/live?p=2&group=style', undefined, { accept: 'application/json' })).text) as { html: string }
+  assert.equal(cards(live.html), 48)
+  assert.match(live.html, /class="lib-pages"/)
+  const byStyle = (await t.c.call('GET', '/library?group=style')).text
+  assert.match(byStyle, /cartoon-a/)
+  assert.equal(cards(byStyle), 48)
+})
