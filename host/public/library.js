@@ -75,6 +75,82 @@
   document.addEventListener('dragleave', (e) => { if (hasFiles(e) && --depth <= 0) { depth = 0; drop.hidden = true } })
   document.addEventListener('drop', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; drop.hidden = true; addFiles(e.dataTransfer.files) })
 
+  // --- fenetre d'une image : clic sur une miniature (grille ou resultats de recherche) ---
+  let dialog = null
+  let published = false
+  const ensureDialog = () => {
+    if (dialog) return dialog
+    dialog = document.createElement('dialog')
+    dialog.id = 'lib-modal'
+    dialog.setAttribute('aria-labelledby', 'lib-modal-title')
+    dialog.innerHTML = '<button type="button" class="modal-close" aria-label="Fermer">×</button><div class="modal-content"></div>'
+    document.body.append(dialog)
+    dialog.querySelector('.modal-close').addEventListener('click', () => dialog.close())
+    dialog.addEventListener('close', () => { if (published) location.reload() }) // la grille derriere reflete l'etat apres un envoi
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close() }) // clic sur le fond
+    dialog.addEventListener('click', (e) => {
+      const b = e.target instanceof Element ? e.target.closest('[data-copy]') : null
+      if (!b) return
+      navigator.clipboard?.writeText(b.dataset.copy).then(() => { b.textContent = 'Copie' ; setTimeout(() => { b.textContent = 'Copier' }, 1500) }).catch(() => {})
+    })
+    // modification et suppression depuis la fenetre : envoi sans recharger, puis la fenetre relit l'etat (ou se ferme apres une suppression)
+    dialog.addEventListener('submit', async (e) => {
+      const f = e.target
+      if (!(f instanceof HTMLFormElement) || !(f.classList.contains('modal-edit') || f.classList.contains('modal-delete'))) return
+      e.preventDefault()
+      const id = /\/library\/([0-9a-f]{32})\//.exec(f.getAttribute('action') || '')?.[1]
+      const del = f.classList.contains('modal-delete')
+      if (del && !confirm('Supprimer cette image de la bibliotheque ? Cette action est definitive.')) return
+      const btn = f.querySelector('button[type=submit]')
+      btn.disabled = true
+      try {
+        const r = await fetch(f.getAttribute('action'), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: new URLSearchParams(new FormData(f)) })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) { btn.disabled = false; let p = f.querySelector('.alert'); if (!p) { p = document.createElement('p'); p.className = 'alert error'; p.setAttribute('role', 'alert'); f.prepend(p) } p.textContent = j.error || 'Operation impossible.'; return }
+        published = true
+        if (del) { dialog.close(); return }
+        if (id) await showInfo(id)
+      } catch { btn.disabled = false }
+    })
+    dialog.addEventListener('submit', async (e) => {
+      const form = e.target
+      if (!(form instanceof HTMLFormElement) || !form.classList.contains('modal-publish')) return
+      e.preventDefault()
+      published = true
+      const id = /\/library\/([0-9a-f]{32})\/publish/.exec(form.getAttribute('action') || '')?.[1]
+      const btn = form.querySelector('button[type=submit]')
+      btn.disabled = true
+      btn.textContent = 'Envoi a Roblox…'
+      try {
+        await fetch(form.getAttribute('action'), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) })
+      } catch { /* l'etat reel est relu ci-dessous */ }
+      if (id) await showInfo(id) // relit l'etat (publiee, en moderation, ou erreur)
+    })
+    return dialog
+  }
+  const showInfo = async (id) => {
+    const d = ensureDialog()
+    const box = d.querySelector('.modal-content')
+    try {
+      const r = await fetch('/library/' + id + '/info', { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+      if (r.status === 401 || r.redirected) { location.reload(); return }
+      const j = await r.json()
+      if (!r.ok) { box.textContent = j.error || 'Image introuvable.'; return }
+      box.innerHTML = j.html
+    } catch { box.textContent = 'Connexion impossible : reessaie.' }
+  }
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+    const a = e.target instanceof Element ? e.target.closest('a.lib-thumb') : null
+    const id = a && /\/library\/([0-9a-f]{32})\/file$/.exec(a.getAttribute('href') || '')?.[1]
+    if (!id || typeof HTMLDialogElement === 'undefined') return
+    e.preventDefault()
+    const d = ensureDialog()
+    d.querySelector('.modal-content').textContent = 'Chargement…'
+    if (!d.open) d.showModal()
+    showInfo(id)
+  })
+
   // --- recherche par description : l'IA cherche, la page suit l'etat de la tache ---
   const findForm = document.getElementById('lib-find-form')
   const findOut = document.getElementById('lib-find-out')

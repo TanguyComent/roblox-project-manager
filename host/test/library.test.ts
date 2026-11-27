@@ -95,12 +95,12 @@ test('fichier : proprietaire seulement, en-tetes sans risque ; modification et s
   assert.equal((await get('0'.repeat(32))).status, 404)
 
   const e = await t.post(`/library/${id}/edit`, { title: 'Mon Icone', scope: 'Icon', style: 'Cartoon A', traits: 'cartoon, saturee', subject: 'Pendule', colors: 'Or', description: 'Une icone', tags: 'a, b' })
-  assert.equal(e.res.status, 303)
+  assert.equal(e.res.status, 200)
   const edited = getImage(t.c.db, t.userId, id)!
   assert.deepEqual([edited.status, edited.folder, edited.scope, edited.style, edited.traits, edited.subject, edited.colors, edited.title, edited.description, edited.tags], ['pending', 'icon', 'icon', 'cartoon-a', 'cartoon,saturee', 'pendule', 'or', 'mon-icone', 'Une icone', 'a,b'], 'une image en attente reste en attente')
   assert.equal((await t.c.call('POST', `/library/${id}/edit`, { csrf: 'faux', title: 'x' }, { accept: 'application/json' })).res.status, 403)
 
-  assert.equal((await t.post(`/library/${id}/delete`)).res.status, 303)
+  assert.equal((await t.post(`/library/${id}/delete`)).res.status, 200)
   assert.equal(getImage(t.c.db, t.userId, id), undefined)
   assert.equal(existsSync(join(config.dataDir, 'library', id)), false, 'fichier supprime')
   assert.equal((await t.post(`/library/${id}/delete`)).res.status, 404)

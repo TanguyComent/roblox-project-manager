@@ -475,3 +475,36 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-why { margin: 0; font-size: 13px; color: var(--accent); }
 .lib-sortbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 0 0 14px; }
 .lib-sortbar p { margin: 0; }
+
+#lib-modal { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--line2); border-radius: 16px; overflow: auto; }
+#lib-modal::backdrop { background: rgba(5, 7, 12, .72); }
+#lib-modal .modal-close { position: sticky; top: 8px; float: right; z-index: 2; width: 34px; min-height: 34px; margin: 8px 8px 0 0; padding: 0; font-size: 22px; line-height: 1; border-radius: 50%; }
+#lib-modal .modal-content { padding: 20px 22px 22px; }
+.info { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 20px; align-items: start; }
+.info-img { display: grid; place-items: center; min-height: 220px; background: repeating-conic-gradient(var(--surface3) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; }
+.info-img img { max-width: 100%; max-height: 60vh; object-fit: contain; }
+.info-body h2 { margin: 0 0 6px; font-size: 18px; overflow-wrap: anywhere; }
+.info-list { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 12px 0; font-size: 13px; }
+.info-list dt { color: var(--muted); }
+.info-list dd { margin: 0; overflow-wrap: anywhere; }
+.info .rbx { margin-top: 14px; padding: 12px; background: var(--surface3); border-radius: 10px; }
+.info .rbx-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+@media (max-width: 720px) { .info { grid-template-columns: 1fr; } }
+
+/* Vue de base : l'image seule (tout le reste est dans la fenetre) */
+.lib-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.lib-card { position: relative; border-radius: 10px; }
+.lib-card .lib-thumb { aspect-ratio: 1 / 1; border: 0; border-radius: 10px; transition: transform .12s ease, box-shadow .12s ease; }
+.lib-card .lib-thumb:hover { transform: translateY(-2px); box-shadow: 0 8px 22px -12px rgba(0, 0, 0, .9); }
+.lib-card .lib-thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lib-card[data-status="sorting"] .lib-thumb { opacity: .55; }
+.modal-manage { margin-top: 14px; }
+.modal-manage summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.modal-edit { display: grid; gap: 8px; margin-top: 10px; }
+.modal-delete { margin-top: 14px; }
+/* ouverture de la fenetre : leger zoom */
+@keyframes lib-pop { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes lib-fade { from { opacity: 0; } to { opacity: 1; } }
+#lib-modal[open] { animation: lib-pop .2s cubic-bezier(.2, .8, .2, 1); }
+#lib-modal[open]::backdrop { animation: lib-fade .2s ease-out; }
+@media (prefers-reduced-motion: reduce) { #lib-modal[open], #lib-modal[open]::backdrop { animation: none; } .lib-card .lib-thumb { transition: none; } }
