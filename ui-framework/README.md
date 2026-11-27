@@ -39,7 +39,7 @@ Six blocs au maximum par reponse. Seuls les blocs de code de **premier niveau** 
 ## Deux situations
 
 - **UI d'un projet** : le Worker a deja tout le depot dans le dossier de travail de la branche ; l'emulateur le lit **en place** (lecture seule, sans `node_modules`). Les modules du jeu non pris en charge (reseau, services Roblox rares) sont remplaces par des modules « fantomes » : l'apercu s'affiche quand meme.
-- **Maquette (chat « Maquette UI »)** : le chat part d'un depot minimal (`UI_TEMPLATE_REPO`, par defaut `boiler-co/Boilr-Template`), clone dans un dossier propre au chat et **jamais pousse**. L'IA remplit tout avec de fausses donnees.
+- **Maquette (chat « Maquette UI »)** : le chat part du **depot de maquette que tu choisis dans Compte > GitHub** (depot et branche de ton compte GitHub connecte : un kit minimal de composants, sans le reste d'un jeu), clone dans un dossier propre au chat et **jamais pousse**. L'IA remplit tout avec de fausses donnees.
 
 ## Securite
 

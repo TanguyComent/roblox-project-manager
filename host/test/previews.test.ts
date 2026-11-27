@@ -11,6 +11,7 @@ import { createChat, listMessages } from '../src/chats.ts'
 import { config } from '../src/config.ts'
 import { PreviewError, previewFile, previewsForJobs, safePath, savePreview } from '../src/previews.ts'
 import { createProject } from '../src/projects.ts'
+import { saveConnection, updateUiTemplate } from '../src/github-connection.ts'
 import { createWorker, getJob, insertJob, markJobRunning } from '../src/workers.ts'
 import { startWorker, type RunningWorker } from '../../worker/src/worker.ts'
 import type { JobHandler } from '../../worker/src/jobs.ts'
@@ -273,9 +274,11 @@ test('supprimer un chat supprime ses apercus (lignes et fichiers)', async () => 
   } finally { await t.close() }
 })
 
-test('chat maquette : depot minimal, sans GitHub du projet, rien de pousse, bien signale', async () => {
+test('chat maquette : part du depot choisi dans le compte GitHub, sans GitHub du projet, rien de pousse', async () => {
   const t = await setup()
   const noRepo = createProject(t.c.db, t.userId, { name: 'Sans depot', groupId: null, groupName: null, githubRepo: null, robloxAccountId: null })
+  const savedFallback = config.uiTemplateRepo
+  config.uiTemplateRepo = null
   try {
     const payloads: Record<string, unknown>[] = []
     const w = createWorker(t.c.db, t.userId, 'PC2', null)
@@ -283,32 +286,57 @@ test('chat maquette : depot minimal, sans GitHub du projet, rien de pousse, bien
     t.running.push(startWorker({ hostUrl: t.url, token: w.token, handlers: { 'ai.chat': aiWith(() => 'Voila.', [], payloads) }, getCapabilities: () => ['git', 'claude'].map((id) => ({ id, label: id, version: null })) }))
     await waitFor(() => t.c.hub.status(w.id) !== 'offline', 'worker en ligne')
 
-    // creation depuis les deux boutons
     const created = await t.c.call('POST', `/projects/${noRepo.id}/chats`, { csrf: t.csrf, mode: 'concept' })
     assert.equal(created.res.status, 303)
     const chatId = Number(/chats\/(\d+)/.exec(created.res.headers.get('location')!)![1])
-    const page = (await t.c.call('GET', `/projects/${noRepo.id}/chats/${chatId}`)).text
-    assert.match(page, /Maquette UI/)
-    assert.match(page, /Quelle interface veux-tu imaginer/)
-    assert.ok(!/Ce projet n&#39;a pas de depot GitHub|Ce projet n'a pas de depot GitHub/.test(page), 'une maquette n\'a pas besoin de depot GitHub')
-    assert.match(page, /<textarea[^>]*name="prompt"(?![^>]*disabled)/)
-    assert.match(page, /Nouvelle maquette/)
+    const chatUrl = `/projects/${noRepo.id}/chats/${chatId}`
 
-    const sent = await t.c.call('POST', `/projects/${noRepo.id}/chats/${chatId}/messages`, { csrf: t.csrf, prompt: 'Une jauge de vie' })
-    assert.equal(sent.res.status, 303)
+    // 1. aucun depot de maquette choisi : le chat l'explique et refuse l'envoi
+    const before = (await t.c.call('GET', chatUrl)).text
+    assert.match(before, /Maquette UI/)
+    assert.match(before, /Aucun depot de maquette n(?:'|&#39;)est choisi/)
+    assert.match(before, /<textarea[^>]*name="prompt"[^>]*disabled/)
+    const refused = await t.c.call('POST', `${chatUrl}/messages`, { csrf: t.csrf, prompt: 'Une jauge de vie' })
+    assert.equal(refused.res.status, 400)
+    assert.match(refused.text, /Aucun depot de maquette/)
+    assert.equal(t.c.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE kind = 'ai.chat'").get()!.n, 0, 'aucune tache creee')
+
+    // 2. le depot choisi dans le compte GitHub (et sa branche) devient le point de depart
+    saveConnection(t.c.db, t.userId, 'acme', 'ghp_secret_token')
+    updateUiTemplate(t.c.db, t.userId, 'acme/mon-kit-ui', 'ui-v2')
+    const ready = (await t.c.call('GET', chatUrl)).text
+    assert.match(ready, /Quelle interface veux-tu imaginer/)
+    assert.doesNotMatch(ready, /<textarea[^>]*name="prompt"[^>]*disabled/)
+    assert.equal((await t.c.call('POST', `${chatUrl}/messages`, { csrf: t.csrf, prompt: 'Une jauge de vie' })).res.status, 303)
     await waitFor(() => payloads.length === 1, 'tache recue par le Worker')
-    assert.deepEqual([payloads[0].mode, payloads[0].push, payloads[0].project, payloads[0].url],
-      ['concept', false, `concept-${chatId}`, `https://github.com/${config.uiTemplateRepo}.git`])
+    assert.deepEqual([payloads[0].mode, payloads[0].push, payloads[0].project, payloads[0].url, payloads[0].base],
+      ['concept', false, `concept-${chatId}`, 'https://github.com/acme/mon-kit-ui.git', 'ui-v2'])
+    assert.ok(!JSON.stringify(payloads[0]).includes('ghp_secret_token'), 'le jeton GitHub n\'est jamais envoye au Worker')
 
-    // un chat normal du meme projet sans depot reste refuse
+    // 3. sans branche choisie : pas de `base` (branche par defaut du depot)
+    updateUiTemplate(t.c.db, t.userId, 'acme/mon-kit-ui', null)
+    await waitFor(() => listMessages(t.c.db, chatId)[1].job_status === 'succeeded', 'reponse')
+    await t.c.call('GET', chatUrl)
+    await t.c.call('POST', `${chatUrl}/messages`, { csrf: t.csrf, prompt: 'Encore' })
+    await waitFor(() => payloads.length === 2, 'seconde tache')
+    assert.equal('base' in payloads[1], false)
+
+    // 4. depot par defaut de l'instance (UI_TEMPLATE_REPO) pour qui n'a rien choisi
+    updateUiTemplate(t.c.db, t.userId, null, null)
+    config.uiTemplateRepo = 'org/defaut'
+    await waitFor(() => listMessages(t.c.db, chatId)[3].job_status === 'succeeded', '2e reponse')
+    await t.c.call('GET', chatUrl)
+    await t.c.call('POST', `${chatUrl}/messages`, { csrf: t.csrf, prompt: 'Et encore' })
+    await waitFor(() => payloads.length === 3, 'troisieme tache')
+    assert.equal(payloads[2].url, 'https://github.com/org/defaut.git')
+
+    // un chat normal du meme projet sans depot GitHub reste refuse
     const normal = createChat(t.c.db, noRepo.id, 'Normal')
     assert.equal((await t.c.call('POST', `/projects/${noRepo.id}/chats/${normal.id}/messages`, { csrf: t.csrf, prompt: 'x' })).res.status, 400)
-
-    // les chats de maquette sont etiquetes dans la liste
-    assert.match((await t.c.call('GET', `/projects/${noRepo.id}/chats/${chatId}`)).text, /<span class="tag">Maquette<\/span>/)
+    assert.match((await t.c.call('GET', chatUrl)).text, /<span class="tag">Maquette<\/span>/)
     const job = getJob(t.c.db, t.userId, listMessages(t.c.db, chatId)[1].job_id!)!
     assert.deepEqual(job.requires, ['git', 'claude'])
-  } finally { await t.close() }
+  } finally { config.uiTemplateRepo = savedFallback; await t.close() }
 })
 
 test('un depot direct ne peut pas ecrire hors de son dossier', () => {

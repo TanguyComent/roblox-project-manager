@@ -2,9 +2,9 @@
 import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
 import { RateLimiter } from './auth.ts'
-import { deleteConnection, getConnection, getToken, saveConnection, updateOwner, updateTemplate } from './github-connection.ts'
+import { deleteConnection, getConnection, getToken, saveConnection, updateOwner, updateTemplate, updateUiTemplate } from './github-connection.ts'
 import { GithubError, type GithubFactory } from './github.ts'
-import { templatePickerPage, type TemplatePickerData } from './github-template-view.ts'
+import { templatePickerPage, type TemplateKind, type TemplatePickerData } from './github-template-view.ts'
 import { renderAccount } from './account-view.ts'
 import type { Db } from './db.ts'
 import type { RobloxClient } from './roblox.ts'
@@ -67,26 +67,42 @@ export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
     return c.redirect('/account?g=saved', 303)
   })
 
-  // --- choix du template par defaut : depot, puis branche ------------------------------------------------------------------
-  const picker = async (c: Context, a: Auth, repoParam: string | undefined, error?: string, status: Status = 200) => {
+  // --- choix d'un template : depot, puis branche. Meme parcours pour deux reglages : le template des nouveaux projets et le depot de maquette UI ---
+  const KINDS: Record<TemplateKind, {
+    path: string
+    current: (c: NonNullable<ReturnType<typeof getConnection>>) => { repo: string; branch: string } | null
+    save: (userId: number, repo: string | null, branch: string | null) => void
+    key: string
+  }> = {
+    project: {
+      path: '/account/github/template', key: 'template',
+      current: (c) => (c.template_repo ? { repo: c.template_repo, branch: c.template_branch ?? '' } : null),
+      save: (u, repo, branch) => updateTemplate(db, u, repo, branch),
+    },
+    ui: {
+      path: '/account/github/ui-template', key: 'ui-template',
+      current: (c) => (c.ui_template_repo ? { repo: c.ui_template_repo, branch: c.ui_template_branch ?? '' } : null),
+      save: (u, repo, branch) => updateUiTemplate(db, u, repo, branch),
+    },
+  }
+
+  const picker = async (c: Context, a: Auth, kind: TemplateKind, repoParam: string | undefined, error?: string, status: Status = 200) => {
     const token = getToken(db, a.user.id)
     const conn = getConnection(db, a.user.id)
     if (!token || !conn) return c.redirect('/account', 303)
     const client = githubFor(token)
-    const data: TemplatePickerData = {
-      repos: [], selected: null, branches: [], branch: null, error,
-      current: conn.template_repo ? { repo: conn.template_repo, branch: conn.template_branch ?? '' } : null,
-    }
+    const current = KINDS[kind].current(conn)
+    const data: TemplatePickerData = { kind, repos: [], selected: null, branches: [], branch: null, error, current }
     try {
       data.repos = await client.listRepos()
-      const wanted = repoParam && REPO.test(repoParam) ? repoParam : conn.template_repo
+      const wanted = repoParam && REPO.test(repoParam) ? repoParam : current?.repo
       const repo = data.repos.find((r) => r.fullName.toLowerCase() === wanted?.toLowerCase())
       if (repo) {
         data.selected = repo.fullName
         data.branches = await client.listBranches(repo.fullName)
         // branche preselectionnee : celle deja enregistree pour ce depot, sinon la branche par defaut du depot
-        data.branch = conn.template_repo === repo.fullName && conn.template_branch && data.branches.includes(conn.template_branch)
-          ? conn.template_branch : data.branches.includes(repo.defaultBranch) ? repo.defaultBranch : (data.branches[0] ?? null)
+        data.branch = current?.repo === repo.fullName && current.branch && data.branches.includes(current.branch)
+          ? current.branch : data.branches.includes(repo.defaultBranch) ? repo.defaultBranch : (data.branches[0] ?? null)
       }
     } catch (e) {
       data.error = `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`
@@ -95,38 +111,42 @@ export function githubRoutes(app: Hono<Env>, ctx: Ctx) {
     return html(c, templatePickerPage({ email: a.user.email, csrf: a.session.csrf, ...data }), status)
   }
 
-  app.get('/account/github/template', async (c) => {
-    const a = requireFull(c)
-    if (a instanceof Response) return a
-    return picker(c, a, c.req.query('repo'))
-  })
+  for (const kind of ['project', 'ui'] as const) {
+    const { path, key, save } = KINDS[kind]
 
-  app.post('/account/github/template', async (c) => {
-    const g = await guard(c)
-    if ('res' in g) return g.res
-    const { a, f } = g
-    const repo = f.s('repo').trim()
-    const branch = f.s('branch').trim()
-    const token = getToken(db, a.user.id)
-    if (!token) return c.redirect('/account', 303)
-    if (!REPO.test(repo) || !branch) return picker(c, a, repo, 'Choisis un depot et une branche.', 400)
-    try {
-      // verifie aupres de GitHub que le depot est accessible et que la branche existe
-      const branches = await githubFor(token).listBranches(repo)
-      if (!branches.includes(branch)) return picker(c, a, repo, `La branche « ${branch} » n'existe pas dans ${repo}.`, 400)
-    } catch (e) {
-      return picker(c, a, repo, `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`, 502)
-    }
-    updateTemplate(db, a.user.id, repo, branch)
-    return c.redirect('/account?g=template', 303)
-  })
+    app.get(path, async (c) => {
+      const a = requireFull(c)
+      if (a instanceof Response) return a
+      return picker(c, a, kind, c.req.query('repo'))
+    })
 
-  app.post('/account/github/template/clear', async (c) => {
-    const g = await guard(c)
-    if ('res' in g) return g.res
-    updateTemplate(db, g.a.user.id, null, null)
-    return c.redirect('/account?g=template-cleared', 303)
-  })
+    app.post(path, async (c) => {
+      const g = await guard(c)
+      if ('res' in g) return g.res
+      const { a, f } = g
+      const repo = f.s('repo').trim()
+      const branch = f.s('branch').trim()
+      const token = getToken(db, a.user.id)
+      if (!token) return c.redirect('/account', 303)
+      if (!REPO.test(repo) || !branch) return picker(c, a, kind, repo, 'Choisis un depot et une branche.', 400)
+      try {
+        // verifie aupres de GitHub que le depot est accessible et que la branche existe
+        const branches = await githubFor(token).listBranches(repo)
+        if (!branches.includes(branch)) return picker(c, a, kind, repo, `La branche « ${branch} » n'existe pas dans ${repo}.`, 400)
+      } catch (e) {
+        return picker(c, a, kind, repo, `${e instanceof GithubError ? e.message : 'GitHub ne repond pas'}.`, 502)
+      }
+      save(a.user.id, repo, branch)
+      return c.redirect(`/account?g=${key}`, 303)
+    })
+
+    app.post(`${path}/clear`, async (c) => {
+      const g = await guard(c)
+      if ('res' in g) return g.res
+      save(g.a.user.id, null, null)
+      return c.redirect(`/account?g=${key}-cleared`, 303)
+    })
+  }
 
   app.post('/account/github/disconnect', async (c) => {
     const g = await guard(c)

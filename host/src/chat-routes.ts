@@ -8,6 +8,7 @@ import {
   pendingJobIds, renameChat, setChatPrefs, syncChat, titleFromFirstMessage, titleProblem, type Chat,
 } from './chats.ts'
 import { config } from './config.ts'
+import { uiTemplateOf } from './github-connection.ts'
 import type { Db } from './db.ts'
 import { deletePreviewsOfJobs, previewsForJobs } from './previews.ts'
 import { getProject, type Project } from './projects.ts'
@@ -73,7 +74,9 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const pendingMsg = messages.find((m) => m.status === 'pending')
     const pending = !!pendingMsg
     const noWorker = !!pendingMsg && pendingMsg.job_status === 'queued' && !!chat && !hub.hasCapable(a.user.id, CHAT_REQUIRES, chat.worker_id)
-    return { chats, chat, messages, events, previews, pending, noWorker, hasRepo: !!project.github_repo || chat?.mode === 'concept' }
+    // « depot disponible » : le depot GitHub du projet, ou, pour une maquette, le depot de maquette choisi dans Compte > GitHub
+    const hasRepo = chat?.mode === 'concept' ? !!uiTemplateOf(db, a.user.id, config.uiTemplateRepo) : !!project.github_repo
+    return { chats, chat, messages, events, previews, pending, noWorker, hasRepo }
   }
 
   const renderPage = (c: Context, a: Auth, project: Project, activeId: number | null, error?: string, status: Status = 200) => {
@@ -136,6 +139,8 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     if (prompt.length > MAX_PROMPT) return fail(`Message trop long (${MAX_PROMPT} caracteres maximum).`)
     if (!modelOk(model) || !effortOk(effort)) return fail('Modele ou effort inconnu.')
     const concept = chat!.mode === 'concept'
+    const template = concept ? uiTemplateOf(db, a.user.id, config.uiTemplateRepo) : null
+    if (concept && !template) return fail("Aucun depot de maquette n'est choisi : definis-le dans Compte, section GitHub.")
     if (!concept && !project.github_repo) return fail("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet.")
     syncChat(db, a.user.id, chat!.id)
     if (hasPendingReply(db, chat!.id)) return fail('Une reponse est deja en cours pour ce chat.', 409)
@@ -148,7 +153,7 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const sessionId = current.worker_id ? current.session_id : null
     // Maquette : le depot minimal (UI_TEMPLATE_REPO), dans un dossier propre a ce chat, jamais pousse. Sinon : le depot GitHub du projet.
     const where = concept
-      ? { project: `concept-${current.id}`, url: `https://github.com/${config.uiTemplateRepo}.git`, push: false, mode: 'concept' }
+      ? { project: `concept-${current.id}`, url: `https://github.com/${template!.repo}.git`, push: false, mode: 'concept', ...(template!.branch ? { base: template!.branch } : {}) }
       : { project: project.slug, url: `https://github.com/${project.github_repo}.git`, push: true, mode: 'project' }
     const jobId = hub.enqueue(a.user.id, 'ai.chat', {
       ...where, branch: current.branch, prompt, sessionId, model: model || null, effort: effort || null,

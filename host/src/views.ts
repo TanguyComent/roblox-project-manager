@@ -253,7 +253,7 @@ function robloxCard(r: RobloxCardData, csrf: string) {
 }
 
 export interface GithubCardData {
-  connection: { login: string; template: string; branch: string; owner: string } | null
+  connection: { login: string; template: string; branch: string; uiTemplate: string; uiBranch: string; owner: string } | null
   error?: string
   notice?: string
 }
@@ -287,6 +287,13 @@ function githubCard(g: GithubCardData, csrf: string) {
     ${g.connection.template
       ? `<div class="exp"><div class="row-main"><strong>${esc(g.connection.template)}</strong><span class="muted">${g.connection.branch ? `branche <code>${esc(g.connection.branch)}</code>` : 'branche par defaut'}</span></div><a class="button" href="/account/github/template">Changer</a></div>`
       : '<a class="button primary" href="/account/github/template">Choisir un template</a>'}
+  </div>
+  <div class="gh-settings">
+    <h3>Depot de maquette UI</h3>
+    <p class="muted small">Le depot minimal dont partent les chats « Maquette UI » (kit de composants, sans le reste d'un jeu).</p>
+    ${g.connection.uiTemplate
+      ? `<div class="exp"><div class="row-main"><strong>${esc(g.connection.uiTemplate)}</strong><span class="muted">${g.connection.uiBranch ? `branche <code>${esc(g.connection.uiBranch)}</code>` : 'branche par defaut'}</span></div><a class="button" href="/account/github/ui-template">Changer</a></div>`
+      : '<a class="button primary" href="/account/github/ui-template">Choisir un depot de maquette</a>'}
   </div>
   <form method="post" action="/account/github/settings" autocomplete="off" class="gh-settings">
     ${csrfField(csrf)}

@@ -216,6 +216,9 @@ const MIGRATIONS = [
      UNIQUE (job_id, n)
    );
    CREATE INDEX previews_user ON previews(user_id);`,
+  // 12 : depot de maquette UI choisi parmi les depots du compte GitHub connecte (remplace le depot fixe)
+  `ALTER TABLE github_connections ADD COLUMN ui_template_repo TEXT;
+   ALTER TABLE github_connections ADD COLUMN ui_template_branch TEXT;`,
 ]
 
 export function openDb(file?: string): Db {

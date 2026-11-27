@@ -123,7 +123,11 @@ function assistantHtml(m: ChatMessage, events: JobEvent[], previews: PreviewRow[
 /** Fil de la conversation (renvoye tel quel par l'endpoint live). */
 export function threadHtml(o: { messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>; hasRepo: boolean; noWorker: boolean; workerName: string | null; concept?: boolean }) {
   const parts: string[] = []
-  if (!o.hasRepo) parts.push(alert("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet pour pouvoir discuter avec l'IA (ou cree une maquette UI, qui n'en a pas besoin)."))
+  if (!o.hasRepo) {
+    parts.push(alert(o.concept
+      ? "Aucun depot de maquette n'est choisi : definis-le dans Compte, section GitHub (« Depot de maquette UI »), pour pouvoir creer des maquettes."
+      : "Ce projet n'a pas de depot GitHub : renseigne-le dans le projet pour pouvoir discuter avec l'IA (ou cree une maquette UI, qui n'a pas besoin du depot du projet)."))
+  }
   if (o.noWorker) parts.push(alert(`Aucun Worker connecte${o.workerName ? ` (« ${o.workerName} »)` : ''} ne dispose de Git et de Claude Code : la demande attend. Lance un Worker, ou verifie ses outils sur la page Workers.`))
   if (!o.messages.length) {
     parts.push(o.concept
