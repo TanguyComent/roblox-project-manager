@@ -1,6 +1,8 @@
 // L'« agent » : ce que l'interface locale pilote (configuration, connexion au Host, journal). Aucune dependance reseau ici hormis le Worker.
 import { DEFAULT_ENV_PATH, readConfig, readWorkspace, workspaceProblem, writeConfig, writeWorkspace } from './config.ts'
 import { aiHandlers } from './ai.ts'
+import { libraryHandlers } from './library.ts'
+import { ToolServer } from './tools.ts'
 import { createGit, type RegistryView, type SweepResult } from './git.ts'
 import { detectCapabilities } from './capabilities.ts'
 import { readPairingInput, type Capability } from './protocol.ts'
@@ -48,7 +50,8 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
   let hostUrl: string | null = null
   let current: RunningWorker | null = null
   const gitInstance = createGit({ workspace: () => readWorkspace(envPath), ...o.git })
-  const aiInstance = aiHandlers({ git: gitInstance, ...o.ai })
+  const toolServer = o.ai?.toolServer ?? new ToolServer() // un seul serveur d'outils pour les chats et la recherche dans la bibliotheque
+  const aiInstance = aiHandlers({ git: gitInstance, ...o.ai, toolServer })
   let caps: Capability[] = []
   let scanning = false
   const detect = o.detect ?? detectCapabilities
@@ -69,7 +72,7 @@ export function createAgent(o: { envPath?: string; version: string; info: Record
     workerName = null
     const gen = ++generation
     current = launch({
-      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: { ...gitInstance.handlers, ...aiInstance },
+      hostUrl: cfg.hostUrl, token: cfg.token, version: o.version, info: o.info, backoff: o.backoff, log, getCapabilities: () => caps, handlers: { ...gitInstance.handlers, ...aiInstance, ...libraryHandlers({ claude: o.ai?.claude, timeoutMs: o.ai?.timeoutMs, toolServer }) },
       onState: (s, d) => {
         if (gen !== generation) return // evenement d'une ancienne connexion
         state = s

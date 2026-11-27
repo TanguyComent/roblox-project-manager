@@ -241,6 +241,56 @@ export const MIGRATIONS = [
    );
    CREATE INDEX chat_attachments_chat ON chat_attachments(chat_id, id);
    CREATE INDEX chat_attachments_user ON chat_attachments(user_id);`,
+  // 15 : bibliotheque d'images de l'utilisateur (le Host est la source de verite ; le vault Obsidian en est derive).
+  `CREATE TABLE library_images (
+     id TEXT PRIMARY KEY,               -- 128 bits aleatoires : nom du fichier sur le disque
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     file_name TEXT NOT NULL,           -- nom d'origine, nettoye
+     title TEXT NOT NULL,               -- nom de la note dans le vault (unique par dossier une fois triee)
+     folder TEXT NOT NULL DEFAULT '',   -- dossier du vault (« icons/shop »), vide tant que l'image n'est pas triee
+     description TEXT NOT NULL DEFAULT '',
+     tags TEXT NOT NULL DEFAULT '',     -- mots-cles separes par des virgules
+     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sorting', 'sorted')),
+     mime TEXT NOT NULL,
+     size INTEGER NOT NULL,
+     sha256 TEXT NOT NULL,
+     sort_job_id INTEGER,               -- tache de tri en cours
+     source TEXT NOT NULL DEFAULT 'upload' CHECK (source IN ('upload', 'generated')),
+     roblox_status TEXT NOT NULL DEFAULT 'unpublished' CHECK (roblox_status IN ('unpublished', 'publishing', 'published', 'failed')),
+     roblox_asset_id TEXT,
+     created_at INTEGER NOT NULL,
+     sorted_at INTEGER
+   );
+   CREATE INDEX library_images_user ON library_images(user_id, status);`,
+  // 16 : facettes de la bibliotheque (scope, style + traits, sujet, couleurs, dimensions, provenance) et styles definis une fois.
+  `ALTER TABLE library_images ADD COLUMN scope TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN style TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN colors TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN width INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE library_images ADD COLUMN height INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE library_images ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+   UPDATE library_images SET scope = folder WHERE status = 'sorted';
+   CREATE TABLE library_styles (
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     definition TEXT NOT NULL DEFAULT '',
+     PRIMARY KEY (user_id, name)
+   );`,
+  // 17 : publication des images sur Roblox (operation en cours, erreur, proprietaire, qui l'a declenchee) et reglage de publication automatique.
+  `ALTER TABLE library_images ADD COLUMN roblox_op TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_error TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_owner TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_account_id INTEGER;
+   ALTER TABLE library_images ADD COLUMN published_by TEXT;
+   ALTER TABLE library_images ADD COLUMN published_at INTEGER;
+   CREATE TABLE library_settings (
+     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     auto_publish INTEGER NOT NULL DEFAULT 1
+   );`,
+  // 18 : dossier d'origine d'une image importee depuis un pack ZIP (indice de classement pour l'agent).
+  `ALTER TABLE library_images ADD COLUMN hint TEXT NOT NULL DEFAULT '';`,
 ]
 
 export function openDb(file?: string): Db {
