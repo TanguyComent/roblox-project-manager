@@ -167,6 +167,7 @@ test('page et suivi en direct : images, boutons, aucune fuite HTML', async () =>
   const id = await t.add('<b>x</b>.png')
   await t.post(`/library/${id}/edit`, { description: '<script>alert(1)</script>' })
   const page = (await t.c.call('GET', '/library')).text
+  for (const m of page.matchAll(/<script src="(\/static\/[^"?]+)/g)) assert.equal((await t.c.call('GET', m[1])).res.status, 200, `script servi : ${m[1]}`)
   assert.match(page, /En attente/)
   assert.match(page, new RegExp(`/library/${id}/file`))
   assert.doesNotMatch(page, /<script>alert\(1\)/)

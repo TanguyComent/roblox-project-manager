@@ -140,6 +140,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   app.get('/static/app.css', asset('app.css', 'text/css'))
   app.get('/static/app.js', asset('app.js', 'text/javascript'))
   app.get('/static/chat.js', asset('chat.js', 'text/javascript'))
+  app.get('/static/library.js', asset('library.js', 'text/javascript'))
   app.get('/healthz', (c) => c.json({ ok: true }))
 
   app.get('/', (c) => home(c) ?? c.redirect('/projects'))
