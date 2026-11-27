@@ -67,7 +67,7 @@
   if (root.dataset.sorting === 'true') {
     const poll = async () => {
       try {
-        const r = await fetch('/library/live', { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+        const r = await fetch('/library/live?group=' + encodeURIComponent(root.dataset.group || 'scope'), { headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
         if (r.status === 401 || r.redirected) { location.reload(); return }
         const j = await r.json()
         if (!j.counts.sorting) { location.reload(); return }

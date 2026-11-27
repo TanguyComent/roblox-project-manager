@@ -11,7 +11,7 @@ const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const hex = (n: number) => n.toString(16).padStart(32, '0')
 const entry = (n: number, over: Record<string, unknown> = {}) => ({
-  id: hex(n), folder: 'icons/armes', title: 'epee-acier', description: 'Icone d epee', tags: ['epee', 'arme'], mime: 'image/png', size: PNG.length, sha256: sha(PNG), roblox_status: 'unpublished', roblox_asset_id: null, ...over,
+  id: hex(n), scope: 'icon', title: 'epee-acier', description: 'Icone d epee', tags: ['epee', 'arme'], style: 'cartoon-a', traits: ['cartoon'], subject: 'epee', colors: ['bleu-acier'], width: 160, height: 120, ratio: 'large', mime: 'image/png', size: PNG.length, sha256: sha(PNG), roblox_status: 'unpublished', roblox_asset_id: null, ...over,
 })
 
 function setup(entries: unknown[], over: Record<string, unknown> = {}) {
@@ -39,11 +39,12 @@ test('reponse du Host : entrees mal formees ignorees, id Roblox seulement si pub
 
 test('library_search : liste lisible, requete transmise, aucun resultat explique', async () => {
   const t = setup([entry(1), entry(2, { title: 'bouclier', roblox_status: 'published', roblox_asset_id: '777' })])
-  const r = textOf(await t.run(t.search, { query: 'epee', folder: 'icons' }))
+  const r = textOf(await t.run(t.search, { query: 'epee', scope: 'icon', ratio: 'large' }))
   assert.match(r, /2 image\(s\)/)
-  assert.match(r, new RegExp(`icons/armes/epee-acier \\[id ${hex(1)}\\] : Icone d epee .*pas encore publiee`))
+  assert.match(r, new RegExp(`icon/epee-acier \\[id ${hex(1)}\\] : Icone d epee\n.*pas encore publiee`))
   assert.match(r, /publiee : rbxassetid:\/\/777/)
-  assert.deepEqual(t.queries[0], { query: 'epee', folder: 'icons' })
+  assert.deepEqual(t.queries[0], { query: 'epee', scope: 'icon', style: '', subject: '', color: '', ratio: 'large' })
+  assert.match(r, /sujet : epee · style : cartoon-a \(cartoon\) · couleurs : bleu-acier · 160x120 large/)
   const none = setup([])
   assert.match(textOf(await none.run(none.search, { query: 'dragon' })), /Aucune image trouvee pour « dragon »/)
   const off = setup([], { searchLibrary: undefined })
@@ -78,7 +79,7 @@ test('library_get : identifiant invalide, inconnu, image corrompue ; rien n est 
 test('recherche cote Worker : adresse, parametres et jeton', async () => {
   let seen = ''
   const f = (async (u: URL, init: RequestInit) => { seen = `${u.pathname}${u.search} ${new Headers(init.headers).get('authorization')}`; return Response.json({ images: [] }) }) as unknown as typeof fetch
-  await searchLibrary('http://h:3000', 'rpmw_t', { query: 'epee rouge', folder: 'icons', id: hex(3) }, f)
-  assert.equal(seen, `/api/worker/library-search?q=epee+rouge&folder=icons&id=${hex(3)} Bearer rpmw_t`)
+  await searchLibrary('http://h:3000', 'rpmw_t', { query: 'epee rouge', scope: 'icon', style: 'cartoon-a', ratio: 'carre', similar: hex(3) }, f)
+  assert.equal(seen, `/api/worker/library-search?q=epee+rouge&scope=icon&style=cartoon-a&ratio=carre&similar=${hex(3)} Bearer rpmw_t`)
   await assert.rejects(searchLibrary('http://h', 't', {}, (async () => new Response('', { status: 403 })) as unknown as typeof fetch), /403/)
 })

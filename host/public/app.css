@@ -432,3 +432,15 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-edit form { display: grid; gap: 6px; margin-top: 8px; }
 .lib-drop { position: fixed; inset: 16px; z-index: 50; display: grid; place-items: center; font-size: 18px; color: var(--accent); background: rgba(10, 12, 18, .8); border: 2px dashed var(--accent); border-radius: 16px; pointer-events: none; }
 .lib-drop[hidden] { display: none; }
+
+.lib-tabs { display: flex; gap: 4px; margin: 0 0 14px; border-bottom: 1px solid var(--line2); }
+.lib-tabs a { padding: 8px 14px; font-size: 13.5px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.lib-tabs a:hover { color: var(--text); }
+.lib-tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+.facts { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip.style { color: #c4a8ff; }
+.chip.subject { color: #7fe3b0; }
+.tag.color { color: var(--text2); background: var(--surface3); }
+.lib-rename { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 400; }
+.lib-rename form { display: flex; gap: 6px; margin-top: 6px; }
+.lib-rename input { min-width: 0; }

@@ -2,9 +2,9 @@
 import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
 import {
-  LibraryError, addImage, cancelSortJobs, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
+  LibraryError, addImage, cancelSortJobs, renameFacet, deleteImage, editImage, getImage, imageCounts, listImages, readImage, resetSorting, startSort, syncLibrary, SORT_REQUIRES,
 } from './library.ts'
-import { libraryGridHtml, libraryPage } from './library-views.ts'
+import { groupOf, libraryGridHtml, libraryPage } from './library-views.ts'
 import type { Db } from './db.ts'
 import type { WorkerHub } from './worker-hub.ts'
 
@@ -36,7 +36,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   app.get('/library', (c) => {
     const a = requireFull(c)
     if (a instanceof Response) return a
-    return html(c, libraryPage({ ...viewer(a), ...state(a) }))
+    return html(c, libraryPage({ ...viewer(a), ...state(a), group: groupOf(c.req.query('group')) }))
   })
 
   app.get('/library/live', (c) => {
@@ -44,7 +44,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     if (a instanceof Response) return a
     const s = state(a)
     c.header('Cache-Control', 'no-store')
-    return c.json({ html: libraryGridHtml(s.images, a.session.csrf), counts: s.counts, error: s.error ?? null })
+    return c.json({ html: libraryGridHtml(s.images, a.session.csrf, groupOf(c.req.query('group'))), counts: s.counts, error: s.error ?? null })
   })
 
   // Televersement : corps brut, nom dans X-File-Name, jeton CSRF dans X-CSRF.
@@ -90,7 +90,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   const fail = (c: Context, a: Auth, e: unknown) => {
     if (!(e instanceof LibraryError)) throw e
     if (wantsJson(c)) return c.json({ error: e.message }, e.status)
-    return html(c, libraryPage({ ...viewer(a), ...state(a), error: e.message }), e.status === 413 ? 400 : e.status)
+    return html(c, libraryPage({ ...viewer(a), ...state(a), group: 'scope', error: e.message }), e.status === 413 ? 400 : e.status)
   }
 
   app.post('/library/sort', async (c) => {
@@ -111,8 +111,18 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
   app.post('/library/:id{[0-9a-f]{32}}/edit', async (c) => {
     const p = await post(c)
     if ('res' in p) return p.res
-    try { editImage(db, p.a.user.id, c.req.param('id'), { title: p.f.s('title'), folder: p.f.s('folder'), description: p.f.s('description'), tags: p.f.s('tags') }) } catch (e) { return fail(c, p.a, e) }
+    try { editImage(db, p.a.user.id, c.req.param('id'), { title: p.f.s('title'), scope: p.f.s('scope'), style: p.f.s('style'), traits: p.f.s('traits'), subject: p.f.s('subject'), colors: p.f.s('colors'), description: p.f.s('description'), tags: p.f.s('tags'), origin: p.f.s('origin') }) } catch (e) { return fail(c, p.a, e) }
     return back(c)
+  })
+
+  // Renomme (ou fusionne) une valeur de scope, de style ou de sujet sur toutes les images.
+  app.post('/library/rename', async (c) => {
+    const p = await post(c)
+    if ('res' in p) return p.res
+    const facet = p.f.s('facet')
+    if (facet !== 'scope' && facet !== 'style' && facet !== 'subject') return fail(c, p.a, new LibraryError('Facette inconnue.'))
+    try { renameFacet(db, p.a.user.id, facet, p.f.s('from'), p.f.s('to')) } catch (e) { return fail(c, p.a, e) }
+    return c.redirect(`/library?group=${facet}`, 303)
   })
 
   app.post('/library/:id{[0-9a-f]{32}}/delete', async (c) => {

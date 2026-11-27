@@ -22,25 +22,35 @@ function run(payload: unknown, mode = 'ok', over: Partial<JobContext> = {}) {
   const h = libraryHandlers({ claude: { cmd: process.execPath, args: [FAKE] } })
   const ctx: JobContext = { jobId: 1, payload, signal: new AbortController().signal, event: (_l, t) => { events.push(t) }, downloadLibraryImage: async () => PNG, ...over }
   const calls = () => readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) as { args: string[]; cwd: string; prompt: string; inbox: string[]; vault: string[]; settings: { permissions: { allow: string[]; deny: string[] } }; mcp: unknown; inboxBytes: number[] }[]
-  return { result: h['library.sort'](ctx) as Promise<{ sorted: { id: string; folder: unknown; title: unknown; description: unknown; tags: unknown }[] }>, events, calls }
+  return { result: h['library.sort'](ctx) as Promise<{ sorted: Record<string, unknown>[] }>, events, calls }
 }
 
 test('charge utile : images mal formees ignorees, notes du vault validees', () => {
-  const p = sortPayload({ images: [img(1, 'a.png'), { ...img(2, 'b.png'), mime: 'image/svg+xml' }, { ...img(3, 'c.png'), id: 'court' }, null], vault: { items: [{ folder: 'icons/armes', title: 'epee', description: 'x\ny' }, { folder: '../evil', title: 'e', description: 'x' }, { folder: 'a/b/c/d', title: 'e', description: 'x' }, { folder: 'ok', title: '', description: 'x' }] } })
-  assert.deepEqual(p.images.map((i) => i.id), [hex(1)])
-  assert.deepEqual(p.notes, [{ folder: 'icons/armes', title: 'epee', description: 'x y' }])
-  assert.throws(() => sortPayload({ images: [] }), /Aucune image/)
+  const p = sortPayload({
+    images: [img(1, 'a.png', PNG, { width: 160, height: 120, origin: 'pack\nX' }), { ...img(2, 'b.png'), mime: 'image/svg+xml' }, { ...img(3, 'c.png'), id: 'court' }, null],
+    vault: {
+      scopes: ['icon', '../evil', 'Bad Scope'], traits: ['cartoon', 'x y'], subjects: ['epee'], styles: [{ name: 'cartoon-a', definition: 'Contours\nepais' }, { name: '../x', definition: 'y' }],
+      items: [{ scope: 'icon', title: 'epee', style: 'cartoon-a', subject: 'epee', description: 'x\ny' }, { scope: '../evil', title: 'e', description: 'x' }, { scope: 'ok', title: '', description: 'x' }],
+    },
+  })
+  assert.deepEqual(p.images.map((i) => [i.id, i.width, i.height, i.origin]), [[hex(1), 160, 120, 'pack X']])
+  assert.deepEqual(p.notes, [{ scope: 'icon', title: 'epee', style: 'cartoon-a', subject: 'epee', description: 'x y' }])
+  assert.deepEqual(p.vocab, { scopes: ['icon'], traits: ['cartoon'], subjects: ['epee'], styles: [{ name: 'cartoon-a', definition: 'Contours epais' }] })
 })
 
 test('tri : images dans inbox/, vault reconstruit, droits minimaux, resultat relie aux identifiants, dossier temporaire supprime', async () => {
-  const t = run({ images: [img(1, 'Epee Acier.png'), img(2, '../fond.png')], vault: { folders: ['icons/armes'], items: [{ folder: 'icons/armes', title: 'hache', description: 'Une hache.' }] } })
+  const t = run({ images: [img(1, 'Epee Acier.png', PNG, { width: 160, height: 120, origin: 'pack Fantasy' }), img(2, '../fond.png')], vault: { scopes: ['icon', 'background'], traits: ['cartoon', 'saturee'], subjects: ['hache'], styles: [{ name: 'cartoon-test', definition: 'Contours epais.' }], items: [{ scope: 'icon', title: 'hache', style: 'cartoon-test', subject: 'hache', description: 'Une hache.' }] } })
   const r = await t.result
-  assert.deepEqual(r.sorted.map((s) => [s.id, s.folder, s.title]), [[hex(1), 'icons/armes', 'image-1'], [hex(2), 'Backgrounds', 'image-2']])
+  assert.deepEqual(r.sorted.map((s) => [s.id, s.scope, s.title, s.style, s.subject]), [[hex(1), 'icon', 'image-1', 'cartoon-test', 'sujet-1'], [hex(2), 'background', 'image-2', 'cartoon-test', 'sujet-2']])
+  assert.ok(JSON.stringify(r.sorted).length < 3000, 'valeurs inattendues ecartees, valeurs connues bornees')
   const c = t.calls()[0]
   assert.deepEqual(c.inbox, ['01-Epee-Acier.png', '02-fond.png'], 'noms nettoyes, numerotes, sans chemin')
-  assert.deepEqual(c.vault, ['icons/armes/hache.md'])
+  assert.deepEqual([...c.vault].sort(), ['_styles/cartoon-test.md', 'icon/hache.md'])
   assert.match(c.prompt, /1\. inbox\/01-Epee-Acier\.png/)
-  assert.match(c.prompt, /Dossiers existants : icons\/armes/)
+  assert.match(c.prompt, /scopes : icon, background/)
+  assert.match(c.prompt, /cartoon-test \(Contours epais\.\)/)
+  assert.match(c.prompt, /\(160x120\) — provenance : pack Fantasy/)
+  assert.match(c.prompt, /sujets deja utilises : hache/)
   assert.match(c.prompt, /DONNEE/)
   assert.deepEqual(c.settings.permissions.allow, ['Read', 'Write', 'Glob', 'Grep'])
   assert.ok(c.settings.permissions.deny.includes('Bash') && c.settings.permissions.deny.includes('WebFetch'))
@@ -64,7 +74,8 @@ test('tri : entrees inconnues, doublons et valeurs etranges sont transmises tell
   const r = await run({ images: [img(1, 'a.png')] }, 'odd').result
   assert.equal(r.sorted.length, 1, 'n inconnu, doublon et non-objets ecartes')
   assert.equal(r.sorted[0].id, hex(1))
-  assert.equal(r.sorted[0].folder, '../../etc', 'valeur brute : c est le Host qui nettoie')
+  assert.equal(r.sorted[0].scope, '../../etc', 'valeur brute : c est le Host qui nettoie')
+  assert.ok(String(r.sorted[0].style_definition).length <= 200, 'longueurs bornees')
 })
 
 test('telechargement d une image : jeton en Authorization et adresse du Host', async () => {

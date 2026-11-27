@@ -21,7 +21,7 @@ if (mode === 'crash') { process.stderr.write('boom'); process.exit(2) }
 console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Je regarde les images.' }] } }))
 const items = [...prompt.matchAll(/^(\d+)\. inbox\/(.+)$/gm)].map((m) => ({ n: Number(m[1]), file: m[2] }))
 if (mode === 'ok') {
-  writeFileSync(join(cwd, 'result.json'), JSON.stringify({ images: items.map((i) => ({ n: i.n, folder: i.n === 1 ? 'icons/armes' : 'Backgrounds', title: `image-${i.n}`, description: `Description de ${i.file}`, tags: ['un', 'deux'] })) }))
+  writeFileSync(join(cwd, 'result.json'), JSON.stringify({ images: items.map((i) => ({ n: i.n, scope: i.n === 1 ? 'icon' : 'background', title: `image-${i.n}`, style: 'cartoon-test', style_definition: 'Contours epais.', traits: ['cartoon', 'saturee'], subject: `sujet-${i.n}`, colors: ['rouge', 'or'], description: `Description de ${i.file}`, tags: ['un', 'deux'], extra: 'x'.repeat(5000) })) }))
 } else if (mode === 'bad') writeFileSync(join(cwd, 'result.json'), '{pas du json')
-else if (mode === 'odd') writeFileSync(join(cwd, 'result.json'), JSON.stringify({ images: [{ n: 99, folder: 'x', title: 'x', description: 'inconnue' }, { n: 1, folder: '../../etc', title: '../evil', description: 'ok', tags: 'a,b' }, { n: 1, folder: 'doublon', title: 'd', description: 'd' }, 'x', { n: 'un' }] }))
+else if (mode === 'odd') writeFileSync(join(cwd, 'result.json'), JSON.stringify({ images: [{ n: 99, folder: 'x', title: 'x', description: 'inconnue' }, { n: 1, scope: '../../etc', title: '../evil', description: 'ok', tags: 'a,b', style_definition: 'y'.repeat(1000) }, { n: 1, folder: 'doublon', title: 'd', description: 'd' }, 'x', { n: 'un' }] }))
 console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Fini.', session_id: '11111111-2222-3333-4444-555555555555', total_cost_usd: 0.01, duration_ms: 5, num_turns: 2 }))

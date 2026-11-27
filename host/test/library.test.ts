@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createUser } from '../src/auth.ts'
 import { config } from '../src/config.ts'
-import { cleanDescription, cleanFolder, cleanTags, cleanTitle, getImage, listImages, searchImages, syncLibrary } from '../src/library.ts'
+import { cleanColors, cleanDescription, cleanFolder, cleanScope, cleanStyle, cleanSubject, cleanTags, cleanTitle, cleanTraits, getImage, imageSize, listImages, listStyles, ratioKind, renameFacet, searchImages, syncLibrary } from '../src/library.ts'
 import { createWorker, finishJob, getJob, markJobRunning } from '../src/workers.ts'
 import { ORIGIN, client, csrfOf, registerAndEnable } from './helpers.ts'
 
@@ -37,7 +37,15 @@ test('nettoyage des valeurs : dossiers, noms, descriptions, mots-cles', () => {
   assert.equal(cleanTitle('***'), 'image')
   assert.ok(cleanTitle('x'.repeat(200)).length <= 60)
   assert.equal(cleanDescription('  une\n\n  phrase‮ '), 'une phrase')
-  assert.equal(cleanDescription('x'.repeat(500)).length, 300)
+  assert.equal(cleanDescription('x'.repeat(500)).length, 160)
+  assert.equal(cleanScope('Icon'), 'icon')
+  assert.equal(cleanScope('../../etc'), 'etc')
+  assert.equal(cleanScope(''), 'divers')
+  assert.equal(cleanStyle('Cartoon Contour Épais!'), 'cartoon-contour-epais')
+  assert.equal(cleanStyle(7), '')
+  assert.equal(cleanTraits(['Cartoon', 'cartoon', 'Contours épais', 'a', 'b', 'c', 'd', 'e']), 'cartoon,contours-epais,a,b,c,d')
+  assert.equal(cleanSubject('Pendule d\'Or'), 'pendule-d-or')
+  assert.equal(cleanColors('Rouge, Bleu nuit, or, vert, jaune'), 'rouge,bleu-nuit,or,vert')
   assert.equal(cleanTags(['Épée', 'epee', 'Arme Blanche', '', 5, 'a', 'b', 'c', 'd', 'e', 'f', 'g']), 'epee,arme-blanche,a,b,c,d,e,f')
   assert.equal(cleanTags('un, deux;trois'), 'un,deux,trois')
 })
@@ -86,10 +94,10 @@ test('fichier : proprietaire seulement, en-tetes sans risque ; modification et s
   assert.notEqual((await get(id, '')).status, 200)
   assert.equal((await get('0'.repeat(32))).status, 404)
 
-  const e = await t.post(`/library/${id}/edit`, { title: 'Mon Icone', folder: 'Icons/Shop', description: 'Une icone', tags: 'a, b' })
+  const e = await t.post(`/library/${id}/edit`, { title: 'Mon Icone', scope: 'Icon', style: 'Cartoon A', traits: 'cartoon, saturee', subject: 'Pendule', colors: 'Or', description: 'Une icone', tags: 'a, b' })
   assert.equal(e.res.status, 303)
   const edited = getImage(t.c.db, t.userId, id)!
-  assert.deepEqual([edited.status, edited.folder, edited.title, edited.description, edited.tags], ['pending', 'icons/shop', 'mon-icone', 'Une icone', 'a,b'], 'une image en attente reste en attente')
+  assert.deepEqual([edited.status, edited.folder, edited.scope, edited.style, edited.traits, edited.subject, edited.colors, edited.title, edited.description, edited.tags], ['pending', 'icon', 'icon', 'cartoon-a', 'cartoon,saturee', 'pendule', 'or', 'mon-icone', 'Une icone', 'a,b'], 'une image en attente reste en attente')
   assert.equal((await t.c.call('POST', `/library/${id}/edit`, { csrf: 'faux', title: 'x' }, { accept: 'application/json' })).res.status, 403)
 
   assert.equal((await t.post(`/library/${id}/delete`)).res.status, 303)
@@ -106,9 +114,11 @@ test('tri : tache envoyee avec les images en attente, resultat applique et reval
   assert.equal(s.res.status, 200, s.text)
   const job = t.c.db.prepare("SELECT id, kind, requires FROM jobs WHERE kind = 'library.sort'").get() as { id: number; kind: string; requires: string }
   assert.equal(job.requires, 'claude')
-  const payload = getJob(t.c.db, t.userId, job.id)!.payload as { images: { id: string; name: string; sha256: string }[]; vault: { items: unknown[] } }
+  const payload = getJob(t.c.db, t.userId, job.id)!.payload as { images: { id: string; name: string; sha256: string; width: number; height: number }[]; vault: { items: unknown[]; scopes: string[]; traits: string[] } }
   assert.deepEqual(payload.images.map((i) => i.id), [a, b, c])
   assert.deepEqual(payload.vault.items, [])
+  assert.ok(payload.vault.scopes.includes('icon') && payload.vault.traits.includes('cartoon'), 'vocabulaires de depart')
+  assert.deepEqual(payload.images.map((i) => [i.width, i.height]), [[0, 0], [0, 0], [0, 0]], 'fausses images : dimensions inconnues')
   assert.ok(listImages(t.c.db, t.userId).every((i) => i.status === 'sorting'))
   assert.equal((await t.post('/library/sort')).res.status, 409, 'un tri est deja en cours')
   assert.equal((await t.post(`/library/${a}/delete`)).res.status, 409, 'pas de suppression pendant le tri')
@@ -116,25 +126,28 @@ test('tri : tache envoyee avec les images en attente, resultat applique et reval
   // l'agent repond : valeurs etranges nettoyees, doublon de nom renomme, une image sans description reste en attente, une image inconnue ignoree
   markJobRunning(t.c.db, job.id, createWorkerFor(t).id)
   finishJob(t.c.db, job.id, 'succeeded', { sorted: [
-    { id: a, folder: '../Icons/Armes', title: 'Epee Acier', description: '  Une epee\n en acier ', tags: ['Epee', 'arme'] },
-    { id: b, folder: 'icons/armes', title: 'epee-acier', description: 'Une autre epee', tags: 'x, y' },
-    { id: c, folder: 'x', title: 'x', description: '' },
-    { id: 'f'.repeat(32), folder: 'x', title: 'x', description: 'inconnue' },
-    { id: a, folder: 'autre', title: 'autre', description: 'doublon' },
+    { id: a, scope: 'Icon', title: 'Epee Acier', style: 'Cartoon A', style_definition: 'Contours epais, aplats satures.', traits: ['cartoon', 'saturee'], subject: 'Epee', colors: ['Bleu acier', 'Or'], description: '  Une epee\n en acier ', tags: ['Epee', 'arme'] },
+    { id: b, scope: 'icon', title: 'epee-acier', style: 'cartoon-a', style_definition: 'ignoree : le style existe deja', description: 'Une autre epee', tags: 'x, y' },
+    { id: c, scope: 'x', title: 'x', description: '' },
+    { id: 'f'.repeat(32), scope: 'x', title: 'x', description: 'inconnue' },
+    { id: a, scope: 'autre', title: 'autre', description: 'doublon' },
   ] })
   syncLibrary(t.c.db, t.userId)
   const rows = Object.fromEntries(listImages(t.c.db, t.userId).map((i) => [i.id, i]))
-  assert.deepEqual([rows[a].status, rows[a].folder, rows[a].title, rows[a].description, rows[a].tags], ['sorted', 'etc/icons/armes'.replace('etc/', ''), 'epee-acier', 'Une epee en acier', 'epee,arme'])
-  assert.deepEqual([rows[b].status, rows[b].folder, rows[b].title], ['sorted', 'icons/armes', 'epee-acier-2'], 'nom unique dans le dossier')
+  assert.deepEqual([rows[a].status, rows[a].scope, rows[a].folder, rows[a].title, rows[a].description, rows[a].tags, rows[a].style, rows[a].traits, rows[a].subject, rows[a].colors], ['sorted', 'icon', 'icon', 'epee-acier', 'Une epee en acier', 'epee,arme', 'cartoon-a', 'cartoon,saturee', 'epee', 'bleu-acier,or'])
+  assert.deepEqual(listStyles(t.c.db, t.userId).map((x) => ({ ...x })), [{ name: 'cartoon-a', definition: 'Contours epais, aplats satures.' }], 'style defini une seule fois')
+  assert.deepEqual([rows[b].status, rows[b].scope, rows[b].title, rows[b].subject], ['sorted', 'icon', 'epee-acier-2', 'epee-acier-2'], 'nom unique dans le scope ; sujet par defaut : le nom')
   assert.equal(rows[c].status, 'pending')
   assert.equal(rows[c].sort_job_id, null)
 
   // un deuxieme tri voit le vault existant
   await t.post('/library/sort')
   const job2 = t.c.db.prepare("SELECT id FROM jobs WHERE kind = 'library.sort' ORDER BY id DESC LIMIT 1").get() as { id: number }
-  const p2 = getJob(t.c.db, t.userId, job2.id)!.payload as { images: unknown[]; vault: { folders: string[]; items: { title: string }[] } }
+  const p2 = getJob(t.c.db, t.userId, job2.id)!.payload as { images: unknown[]; vault: { scopes: string[]; styles: { name: string; definition: string }[]; subjects: string[]; items: { title: string }[] } }
   assert.deepEqual(p2.images.length, 1)
-  assert.deepEqual(p2.vault.folders, ['icons/armes'])
+  assert.ok(p2.vault.scopes.includes('icon'))
+  assert.deepEqual(p2.vault.styles.map((x) => ({ ...x })), [{ name: 'cartoon-a', definition: 'Contours epais, aplats satures.' }])
+  assert.deepEqual(p2.vault.subjects.sort(), ['epee', 'epee-acier-2'])
   assert.deepEqual(p2.vault.items.map((i) => i.title), ['epee-acier', 'epee-acier-2'])
 })
 
@@ -214,19 +227,28 @@ test('recherche : classement par nom / mots-cles / dossier / description, images
   const t = await setup()
   const sorted = async (name: string, f: Record<string, string>) => {
     const id = await t.add(name)
-    t.c.db.prepare("UPDATE library_images SET status = 'sorted', folder = ?, title = ?, description = ?, tags = ? WHERE id = ?").run(f.folder, f.title, f.description, f.tags, id)
+    t.c.db.prepare("UPDATE library_images SET status = 'sorted', scope = ?, folder = ?, title = ?, description = ?, tags = ?, style = ?, traits = ?, subject = ?, colors = ?, width = ?, height = ? WHERE id = ?").run(f.scope, f.scope, f.title, f.description, f.tags, f.style, f.traits, f.subject, f.colors, Number(f.w), Number(f.h), id)
     return id
   }
-  const sword = await sorted('a.png', { folder: 'icons/armes', title: 'epee-acier', description: 'Icone d epee en acier', tags: 'epee,arme,acier' })
-  const shield = await sorted('b.png', { folder: 'icons/armes', title: 'bouclier', description: 'Un bouclier rond avec une epee gravee', tags: 'bouclier,defense' })
-  const bg = await sorted('c.png', { folder: 'backgrounds', title: 'foret', description: 'Foret sombre', tags: 'foret,nature' })
+  const sword = await sorted('a.png', { scope: 'icon', title: 'epee-acier', description: 'Icone d epee en acier', tags: 'epee,sword,arme,acier', style: 'cartoon-a', traits: 'cartoon,saturee', subject: 'epee', colors: 'bleu-acier,or', w: '128', h: '128' })
+  const shield = await sorted('b.png', { scope: 'icon', title: 'bouclier', description: 'Un bouclier rond avec une epee gravee', tags: 'bouclier,defense', style: 'cartoon-a', traits: 'cartoon,contours-epais', subject: 'bouclier', colors: 'bois,or', w: '128', h: '128' })
+  const bg = await sorted('c.png', { scope: 'background', title: 'foret', description: 'Foret sombre', tags: 'foret,nature,forest', style: 'pixel-b', traits: 'pixel-art,sombre', subject: 'foret', colors: 'vert,noir', w: '512', h: '128' })
   await t.add('en-attente.png') // pas triee : jamais renvoyee
   const ids = (o: Parameters<typeof searchImages>[2]) => searchImages(t.c.db, t.userId, o).map((h) => h.id)
   assert.deepEqual(ids({ query: 'epee' }), [sword, shield], 'le nom et les mots-cles priment sur la description')
   assert.deepEqual(ids({ query: 'ÉPÉE arme' }), [sword, shield])
   assert.deepEqual(ids({ query: 'dragon' }), [])
-  assert.deepEqual(ids({ query: '', folder: 'icons' }), [shield, sword], 'sans requete : tout le dossier')
-  assert.deepEqual(ids({ folder: 'backgrounds' }), [bg])
+  assert.deepEqual(ids({ query: '', scope: 'icon' }), [shield, sword], 'sans requete : tout le scope')
+  assert.deepEqual(ids({ query: 'sword' }), [sword], 'mots-cles bilingues')
+  assert.deepEqual(ids({ subject: 'epee' }), [sword])
+  assert.deepEqual(ids({ style: 'Cartoon A' }), [shield, sword])
+  assert.deepEqual(ids({ color: 'or' }), [shield, sword])
+  assert.deepEqual(ids({ ratio: 'bandeau' }), [bg])
+  assert.deepEqual(ids({ ratio: 'carre', scope: 'icon', color: 'bois' }), [shield])
+  assert.deepEqual(ids({ query: 'pixel' }), [bg], 'les traits et le style comptent dans la recherche')
+  assert.deepEqual(ids({ similar: sword }), [shield], 'style proche : meme style, traits communs ; pas l image elle-meme ni un style different')
+  assert.deepEqual(ids({ similar: bg }), [])
+  assert.deepEqual(ids({ scope: 'background' }), [bg])
   assert.deepEqual(ids({ id: bg }), [bg])
   assert.equal(searchImages(t.c.db, t.userId, {}).length, 3)
   assert.equal(searchImages(t.c.db, t.userId, { limit: 2 }).length, 2)
@@ -237,7 +259,7 @@ test('routes Worker de la bibliotheque pour un chat : recherche et telechargemen
   const t = await setup()
   const id = await t.add('a.png')
   const pending = await t.add('b.png')
-  t.c.db.prepare("UPDATE library_images SET status = 'sorted', folder = 'icons', title = 'icone', description = 'Une icone', tags = 'icone' WHERE id = ?").run(id)
+  t.c.db.prepare("UPDATE library_images SET status = 'sorted', scope = 'icon', folder = 'icon', title = 'icone', description = 'Une icone', tags = 'icone' WHERE id = ?").run(id)
   const w = createWorkerFor(t)
   const call = (path: string, token = w.token) => t.c.app.request(`${ORIGIN}${path}`, { headers: { authorization: `Bearer ${token}` } })
   assert.equal((await call('/api/worker/library-search?q=icone')).status, 403, 'aucun chat en cours')
@@ -260,4 +282,36 @@ test('routes Worker de la bibliotheque pour un chat : recherche et telechargemen
   markJobRunning(t.c.db, t.c.hub.enqueue(other.id, 'ai.chat', {}, { requires: [] }), w2.id)
   assert.equal((await call(`/api/worker/library/${id}`, w2.token)).status, 404, 'image d un autre utilisateur')
   assert.deepEqual(((await (await call('/api/worker/library-search?q=icone', w2.token)).json()) as { images: unknown[] }).images, [])
+})
+
+
+test('dimensions lues dans les octets, ratio, renommage et fusion d une facette', async () => {
+  assert.deepEqual(imageSize(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), Buffer.from('IHDR'), Buffer.from([0, 0, 1, 0, 0, 0, 0, 128]), Buffer.alloc(8)])), { width: 256, height: 128 })
+  assert.deepEqual(imageSize(Buffer.from('GIF89a\x40\x00\x20\x00', 'latin1')), { width: 64, height: 32 })
+  assert.deepEqual(imageSize(Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 17, 8, 0, 100, 0, 200, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])), { width: 200, height: 100 })
+  assert.equal(imageSize(Buffer.from('pas une image')), null)
+  assert.deepEqual([ratioKind(100, 100), ratioKind(160, 100), ratioKind(100, 160), ratioKind(400, 100), ratioKind(0, 0)], ['carre', 'large', 'haut', 'bandeau', ''])
+  const t = await setup()
+  const mk = async (name: string, scope: string, style: string, title: string) => {
+    const id = await t.add(name)
+    t.c.db.prepare("UPDATE library_images SET status = 'sorted', scope = ?, folder = ?, style = ?, title = ?, description = 'd' WHERE id = ?").run(scope, scope, style, title, id)
+    return id
+  }
+  const a = await mk('a.png', 'icon', 'cartoon-a', 'epee')
+  const b = await mk('b.png', 'icons', 'cartoon-b', 'epee')
+  assert.equal(renameFacet(t.c.db, t.userId, 'scope', 'icons', 'Icon'), 1, 'fusion de deux scopes')
+  const merged = getImage(t.c.db, t.userId, b)!
+  assert.deepEqual([merged.scope, merged.folder, merged.title], ['icon', 'icon', 'epee-2'], 'noms uniques apres fusion')
+  t.c.db.prepare("INSERT INTO library_styles (user_id, name, definition) VALUES (?, 'cartoon-b', 'Def B')").run(t.userId)
+  assert.equal(renameFacet(t.c.db, t.userId, 'style', 'cartoon-b', 'cartoon-a'), 1)
+  assert.equal(getImage(t.c.db, t.userId, b)!.style, 'cartoon-a')
+  assert.deepEqual(listStyles(t.c.db, t.userId).map((s) => s.name), ['cartoon-a'], 'ancien style supprime')
+  assert.equal(renameFacet(t.c.db, t.userId, 'subject', 'rien', 'autre'), 0)
+  assert.throws(() => renameFacet(t.c.db, t.userId, 'style', '', 'x'), /Nom invalide/)
+  assert.equal((await t.post('/library/rename', { facet: 'style', from: 'cartoon-a', to: 'cartoon-final' })).res.status, 303)
+  assert.equal(getImage(t.c.db, t.userId, a)!.style, 'cartoon-final')
+  assert.equal((await t.post('/library/rename', { facet: 'folder', from: 'x', to: 'y' })).res.status, 400)
+  const page = (await t.c.call('GET', '/library?group=style')).text
+  assert.match(page, /cartoon-final/)
+  assert.match((await t.c.call('GET', '/library?group=subject')).text, /Par sujet/)
 })

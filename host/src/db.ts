@@ -262,6 +262,22 @@ export const MIGRATIONS = [
      sorted_at INTEGER
    );
    CREATE INDEX library_images_user ON library_images(user_id, status);`,
+  // 16 : facettes de la bibliotheque (scope, style + traits, sujet, couleurs, dimensions, provenance) et styles definis une fois.
+  `ALTER TABLE library_images ADD COLUMN scope TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN style TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN traits TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN colors TEXT NOT NULL DEFAULT '';
+   ALTER TABLE library_images ADD COLUMN width INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE library_images ADD COLUMN height INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE library_images ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+   UPDATE library_images SET scope = folder WHERE status = 'sorted';
+   CREATE TABLE library_styles (
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     name TEXT NOT NULL,
+     definition TEXT NOT NULL DEFAULT '',
+     PRIMARY KEY (user_id, name)
+   );`,
 ]
 
 export function openDb(file?: string): Db {

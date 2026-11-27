@@ -39,7 +39,9 @@ export function attachmentRoutes(app: Hono<Env>, ctx: { db: Db }) {
     if (!worker) return c.json({ error: 'Jeton invalide.' }, 403)
     if (!db.prepare("SELECT 1 FROM jobs WHERE worker_id = ? AND status = 'running' AND kind = 'ai.chat'").get(worker.id)) return c.json({ error: 'Aucune conversation en cours sur ce Worker.' }, 403)
     const id = c.req.query('id')
-    const hits = searchImages(db, worker.user_id, { query: c.req.query('q')?.slice(0, 200), folder: c.req.query('folder')?.slice(0, 100), id: id && isLibraryId(id) ? id : undefined, limit: Number(c.req.query('limit')) || 20 })
+    const q = (k: string) => c.req.query(k)?.slice(0, 100) || undefined
+    const similar = q('similar')
+    const hits = searchImages(db, worker.user_id, { query: c.req.query('q')?.slice(0, 200), scope: q('scope'), style: q('style'), subject: q('subject'), color: q('color'), ratio: q('ratio'), id: id && isLibraryId(id) ? id : undefined, similar: similar && isLibraryId(similar) ? similar : undefined, limit: Number(c.req.query('limit')) || 20 })
     return c.json({ images: hits })
   })
 

@@ -12,7 +12,7 @@ export interface JobContext {
   /** Telecharge une image de la bibliotheque de l'utilisateur (citee par cette tache de tri) depuis le Host. */
   downloadLibraryImage?(id: string): Promise<Buffer>
   /** Cherche dans les images triees de la bibliotheque de l'utilisateur (outils des agents d'UI). */
-  searchLibrary?(q: { query?: string; folder?: string; id?: string }): Promise<unknown>
+  searchLibrary?(q: { query?: string; scope?: string; style?: string; subject?: string; color?: string; ratio?: string; id?: string; similar?: string }): Promise<unknown>
   uploadPreview?(dir: string | null, meta: import('./preview.ts').PreviewMeta): Promise<string>
 }
 export type JobHandler = (ctx: JobContext) => Promise<unknown>

@@ -14,7 +14,8 @@ export const LIBRARY_DIR = '_library'
 const EXT: Record<string, string> = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' }
 
 export interface LibraryEntry {
-  id: string; folder: string; title: string; description: string; tags: string[]; mime: string; size: number; sha256: string
+  id: string; scope: string; title: string; description: string; tags: string[]; style: string; traits: string[]; subject: string; colors: string[]
+  width: number; height: number; ratio: string; mime: string; size: number; sha256: string
   roblox_status: string; roblox_asset_id: string | null
 }
 
@@ -34,10 +35,12 @@ export function parseEntries(raw: unknown): LibraryEntry[] {
     if (!isObj(e) || typeof e.id !== 'string' || !/^[0-9a-f]{32}$/.test(e.id) || typeof e.mime !== 'string' || !EXT[e.mime]) continue
     if (typeof e.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(e.sha256) || typeof e.size !== 'number') continue
     const asset = typeof e.roblox_asset_id === 'string' && /^\d{1,20}$/.test(e.roblox_asset_id) && e.roblox_status === 'published' ? e.roblox_asset_id : null
+    const strs = (v: unknown, n: number) => (Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string').slice(0, n).map((t) => t.slice(0, 40)) : [])
     out.push({
-      id: e.id, folder: String(e.folder ?? '').slice(0, 100), title: String(e.title ?? '').slice(0, 60), description: String(e.description ?? '').slice(0, 300),
-      tags: Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string').slice(0, 8) : [], mime: e.mime, size: e.size, sha256: e.sha256,
-      roblox_status: String(e.roblox_status ?? 'unpublished'), roblox_asset_id: asset,
+      id: e.id, scope: String(e.scope ?? '').slice(0, 40), title: String(e.title ?? '').slice(0, 60), description: String(e.description ?? '').slice(0, 300),
+      tags: strs(e.tags, 8), style: String(e.style ?? '').slice(0, 40), traits: strs(e.traits, 6), subject: String(e.subject ?? '').slice(0, 40), colors: strs(e.colors, 4),
+      width: Number.isInteger(e.width) ? (e.width as number) : 0, height: Number.isInteger(e.height) ? (e.height as number) : 0, ratio: String(e.ratio ?? '').slice(0, 12),
+      mime: e.mime, size: e.size, sha256: e.sha256, roblox_status: String(e.roblox_status ?? 'unpublished'), roblox_asset_id: asset,
     })
   }
   return out
@@ -46,7 +49,7 @@ export function parseEntries(raw: unknown): LibraryEntry[] {
 /** La reference a ecrire dans la propriete Image. */
 export const referenceOf = (e: Pick<LibraryEntry, 'id' | 'roblox_asset_id'>) => (e.roblox_asset_id ? `rbxassetid://${e.roblox_asset_id}` : `rbxlib://${e.id}`)
 
-const line = (e: LibraryEntry) => `- ${e.folder}/${e.title} [id ${e.id}] : ${e.description} (mots-cles : ${e.tags.join(', ') || '-'}) → ${e.roblox_asset_id ? `publiee : ${referenceOf(e)}` : 'pas encore publiee sur Roblox'}`
+const line = (e: LibraryEntry) => `- ${e.scope}/${e.title} [id ${e.id}] : ${e.description}\n    sujet : ${e.subject || '-'} · style : ${e.style || '-'}${e.traits.length ? ` (${e.traits.join(', ')})` : ''} · couleurs : ${e.colors.join(', ') || '-'} · ${e.width ? `${e.width}x${e.height} ${e.ratio}` : 'taille inconnue'} → ${e.roblox_asset_id ? `publiee : ${referenceOf(e)}` : 'pas encore publiee sur Roblox'}`
 
 /** Associe a chaque image deposee dans l'atelier sa (ou ses) reference(s) ; lu par l'emulateur (preview.mjs --images). */
 function remember(dir: string, e: LibraryEntry, file: string) {
@@ -64,18 +67,25 @@ export function libraryTools(s: LibraryToolsState): ToolDef[] {
 
   const search: ToolDef = {
     name: 'library_search',
-    description: "Cherche dans la bibliotheque d'images de l'utilisateur (images deja decrites et rangees par dossier : icones, fonds, personnages...). "
+    description: "Cherche dans la bibliotheque d'images de l'utilisateur (images deja decrites : scope, style, sujet, couleurs). "
       + "A utiliser AVANT d'inventer un visuel ou de laisser un emplacement d'image vide, des qu'une interface a besoin d'une icone ou d'une illustration. "
-      + "`query` : quelques mots (nom, theme, couleur, usage) ; `folder` : restreint a un dossier. Sans `query`, liste les images (du dossier). Renvoie l'id de chaque image : passe-le a library_get pour la recuperer.",
-    inputSchema: { type: 'object', properties: { query: { type: 'string' }, folder: { type: 'string', description: 'Dossier du vault (ex. icons/armes).' } } },
+      + "`query` : quelques mots (sujet, theme, usage) ; filtres exacts facultatifs : `scope` (icon, decoration, background...), `style` (nom d'un style : pour garder un ECRAN COHERENT, choisis un style et ne pioche que dedans), `subject` (pendule, poubelle...), `color`, `ratio` (carre, large, haut, bandeau). "
+      + "Sans rien, liste les images. Renvoie l'id de chaque image : passe-le a library_get pour la recuperer.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' }, scope: { type: 'string' }, style: { type: 'string' }, subject: { type: 'string' }, color: { type: 'string' },
+        ratio: { type: 'string', enum: ['carre', 'large', 'haut', 'bandeau'] },
+      },
+    },
     async run(args): Promise<ToolResult> {
       if (!s.ctx.searchLibrary) return unavailable()
-      const query = typeof args.query === 'string' ? args.query.slice(0, 200) : ''
-      const folder = typeof args.folder === 'string' ? args.folder.slice(0, 100) : ''
+      const str = (v: unknown, n = 100) => (typeof v === 'string' ? v.slice(0, n) : '')
+      const q = { query: str(args.query, 200), scope: str(args.scope), style: str(args.style), subject: str(args.subject), color: str(args.color), ratio: str(args.ratio, 12) }
       let hits: LibraryEntry[]
-      try { hits = parseEntries(await s.ctx.searchLibrary({ query, folder })) } catch (e) { return text(`Recherche impossible : ${e instanceof Error ? e.message.slice(0, 160) : 'erreur'}`, true) }
+      try { hits = parseEntries(await s.ctx.searchLibrary(q)) } catch (e) { return text(`Recherche impossible : ${e instanceof Error ? e.message.slice(0, 160) : 'erreur'}`, true) }
       for (const h of hits) cache.set(h.id, h)
-      if (!hits.length) return text(`Aucune image trouvee${query ? ` pour « ${query} »` : ''}. La bibliotheque contient peut-etre autre chose : essaie d'autres mots, ou liste sans query. Sinon, dessine l'element avec des composants de l'interface.`)
+      if (!hits.length) return text(`Aucune image trouvee${q.query ? ` pour « ${q.query} »` : ''}. Essaie d'autres mots, retire un filtre, ou liste sans rien. Sinon, dessine l'element avec des composants de l'interface.`)
       return text(`${hits.length} image(s) :\n${hits.map(line).join('\n')}\n\nPour en utiliser une, appelle library_get avec son id.`)
     },
   }
@@ -102,9 +112,14 @@ export function libraryTools(s: LibraryToolsState): ToolDef[] {
         writeFileSync(join(dir, file), data)
         remember(dir, e, file)
         const ref = referenceOf(e)
+        let similar = ''
+        try {
+          const near = parseEntries(await s.ctx.searchLibrary({ similar: id })).slice(0, 5)
+          if (near.length) similar = `\nImages de style proche (pour un ecran coherent) :\n${near.map(line).join('\n')}`
+        } catch { /* suggestions facultatives */ }
         return {
           content: [
-            { type: 'text', text: `${e.folder}/${e.title} : ${e.description}\nReference a utiliser dans Image : ${ref}${e.roblox_asset_id ? '' : "\n(Image pas encore publiee sur Roblox : l'apercu l'affiche, elle sera publiee quand le concept sera integre au projet.)"}\nFichier copie dans l'atelier : ${LIBRARY_DIR}/${file}` },
+            { type: 'text', text: `${e.scope}/${e.title} : ${e.description}\nStyle : ${e.style || '-'}${e.traits.length ? ` (${e.traits.join(', ')})` : ''}\nReference a utiliser dans Image : ${ref}${e.roblox_asset_id ? '' : "\n(Image pas encore publiee sur Roblox : l'apercu l'affiche, elle sera publiee quand le concept sera integre au projet.)"}\nFichier copie dans l'atelier : ${LIBRARY_DIR}/${file}${similar}` },
             { type: 'image', data: data.toString('base64'), mimeType: e.mime },
           ],
         }
