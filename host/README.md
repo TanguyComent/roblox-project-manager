@@ -123,3 +123,9 @@ la meme conversation ; si ce Worker est supprime, un autre prend le relais (nouv
 - **Interface** (dans l'esprit de Claude Code) : liste des chats a gauche avec une pastille par chat (en cours, en attente d'un Worker, reponse non lue, echec), conversation a droite avec
   l'**activite de l'IA** en direct (pensee quand le modele en produit une, lecture / ecriture de fichiers, commandes), choix du **modele** et de l'**effort** par chat, titre et branche deduits
   du premier message. La page se met a jour sans rechargement (interrogation de `/projects/:id/chats/:cid/live`, `public/chat.js`) ; Entree envoie, Maj+Entree passe a la ligne.
+
+### Apercus d'interface et maquettes
+
+L'IA peut **montrer une interface** : elle termine sa reponse par un bloc ```rpm-ui (format et trajet complets dans [`../ui-framework/README.md`](../ui-framework/README.md)). Le Worker construit l'apercu de la story avec l'emulateur et l'envoie au Host (`POST /api/worker/previews`, jeton du Worker) ; le chat l'affiche, **interactif**, dans un `<iframe sandbox="allow-scripts">` sans `allow-same-origin` (voir `src/preview-routes.ts` pour le modele de securite). Les paquets sont stockes dans `DATA_DIR/previews/` et supprimes avec le chat ; quotas : 12 Mo par apercu, 500 Mo par utilisateur.
+
+Le bouton **Maquette UI** cree un chat sans depot GitHub : il part du depot minimal `UI_TEMPLATE_REPO` (defaut `boiler-co/Boilr-Template`), clone dans un dossier propre au chat, jamais pousse ; l'IA y remplit tout avec de fausses donnees.

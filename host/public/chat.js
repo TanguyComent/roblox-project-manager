@@ -31,6 +31,32 @@
   }
   restoreDetails(document)
 
+  // --- mise a jour du fil SANS recharger les apercus d'interface ---
+  // Remplacer tout le HTML rechargerait les <iframe> (l'etat d'un apercu interactif serait perdu a chaque mise a jour) : on ne touche qu'aux messages qui
+  // ont change. Deplacer un <iframe> dans la page le recharge aussi : les messages inchanges restent donc exactement ou ils sont.
+  const sameHtml = (a, b) => a.outerHTML.replace(/ open=""/g, '') === b.outerHTML.replace(/ open=""/g, '')
+  const patchThread = (container, html) => {
+    const tmp = document.createElement('div')
+    tmp.innerHTML = html
+    const next = tmp.querySelector('.thread')
+    const cur = container.querySelector('.thread')
+    if (!next || !cur) { container.innerHTML = html; return }
+    const keyOf = (el, i) => el.id || 'n' + i
+    const old = new Map()
+    Array.from(cur.children).forEach((el, i) => old.set(keyOf(el, i), el))
+    let prev = null
+    Array.from(next.children).forEach((el, i) => {
+      const k = keyOf(el, i)
+      const o = old.get(k)
+      let node
+      if (o && sameHtml(o, el)) { node = o; old.delete(k) }
+      else if (o) { o.replaceWith(el); old.delete(k); node = el }
+      else { node = el; if (prev) prev.after(node); else cur.prepend(node) }
+      prev = node
+    })
+    for (const o of old.values()) o.remove()
+  }
+
   // --- mise a jour en direct ---
   let lastList = list ? list.innerHTML : ''
   let lastThread = messages ? messages.innerHTML : ''
@@ -48,7 +74,7 @@
     if (list && j.list !== lastList) { list.innerHTML = j.list; lastList = j.list }
     if (messages && j.thread !== lastThread) {
       const stick = nearBottom()
-      messages.innerHTML = j.thread
+      patchThread(messages, j.thread)
       lastThread = j.thread
       restoreDetails(messages)
       if (stick) toBottom()

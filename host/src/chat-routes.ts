@@ -4,10 +4,12 @@ import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
 import { chatListHtml, chatPage, threadHtml } from './chat-views.ts'
 import {
-  DEFAULT_TITLE, MAX_PROMPT, activityByJob, addExchange, createChat, deleteChat, effortOk, getChat, hasPendingReply, listChats, listMessages, markSeen, modelOk,
+  CONCEPT_TITLE, DEFAULT_TITLE, MAX_PROMPT, allJobIds, activityByJob, addExchange, createChat, deleteChat, effortOk, getChat, hasPendingReply, listChats, listMessages, markSeen, modelOk,
   pendingJobIds, renameChat, setChatPrefs, syncChat, titleFromFirstMessage, titleProblem, type Chat,
 } from './chats.ts'
+import { config } from './config.ts'
 import type { Db } from './db.ts'
+import { deletePreviewsOfJobs, previewsForJobs } from './previews.ts'
 import { getProject, type Project } from './projects.ts'
 import { messagePage } from './views.ts'
 import type { WorkerHub } from './worker-hub.ts'
@@ -65,11 +67,13 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const chats = syncProject(a, project, activeId)
     const chat = activeId === null ? null : chats.find((x) => x.id === activeId) ?? null
     const messages = chat ? listMessages(db, chat.id) : []
-    const events = activityByJob(db, messages.flatMap((m) => (m.job_id ? [m.job_id] : [])))
+    const jobIds = messages.flatMap((m) => (m.job_id ? [m.job_id] : []))
+    const events = activityByJob(db, jobIds)
+    const previews = previewsForJobs(db, jobIds)
     const pendingMsg = messages.find((m) => m.status === 'pending')
     const pending = !!pendingMsg
     const noWorker = !!pendingMsg && pendingMsg.job_status === 'queued' && !!chat && !hub.hasCapable(a.user.id, CHAT_REQUIRES, chat.worker_id)
-    return { chats, chat, messages, events, pending, noWorker, hasRepo: !!project.github_repo }
+    return { chats, chat, messages, events, previews, pending, noWorker, hasRepo: !!project.github_repo || chat?.mode === 'concept' }
   }
 
   const renderPage = (c: Context, a: Auth, project: Project, activeId: number | null, error?: string, status: Status = 200) => {
@@ -89,10 +93,11 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
   app.post('/projects/:id{[0-9]+}/chats', async (c) => {
     const g = await guard(c, { post: true })
     if ('res' in g) return g.res
-    const title = g.f.s('title').trim() || DEFAULT_TITLE
+    const mode = g.f.s('mode') === 'concept' ? 'concept' : 'project'
+    const title = g.f.s('title').trim() || (mode === 'concept' ? CONCEPT_TITLE : DEFAULT_TITLE)
     const problem = titleProblem(title)
     if (problem) return renderPage(c, g.a, g.project, null, problem, 400)
-    const chat = createChat(db, g.project.id, title)
+    const chat = createChat(db, g.project.id, title, mode)
     return c.redirect(`/projects/${g.project.id}/chats/${chat.id}`, 303)
   })
 
@@ -110,7 +115,7 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     c.header('Cache-Control', 'no-store')
     return c.json({
       list: chatListHtml({ project: g.project, chats: s.chats, activeId: g.chat!.id, csrf: g.a.session.csrf }),
-      thread: threadHtml({ messages: s.messages, events: s.events, hasRepo: s.hasRepo, noWorker: s.noWorker, workerName: s.chat?.worker_name ?? null }),
+      thread: threadHtml({ messages: s.messages, events: s.events, previews: s.previews, hasRepo: s.hasRepo, noWorker: s.noWorker, workerName: s.chat?.worker_name ?? null, concept: s.chat?.mode === 'concept' }),
       pending: s.pending,
       busy: s.chats.some((x) => x.state === 'running' || x.state === 'queued'),
       unread: s.chats.filter((x) => x.state === 'unread').length,
@@ -130,7 +135,8 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     if (!prompt) return fail('Ecris un message.')
     if (prompt.length > MAX_PROMPT) return fail(`Message trop long (${MAX_PROMPT} caracteres maximum).`)
     if (!modelOk(model) || !effortOk(effort)) return fail('Modele ou effort inconnu.')
-    if (!project.github_repo) return fail("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet.")
+    const concept = chat!.mode === 'concept'
+    if (!concept && !project.github_repo) return fail("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet.")
     syncChat(db, a.user.id, chat!.id)
     if (hasPendingReply(db, chat!.id)) return fail('Une reponse est deja en cours pour ce chat.', 409)
 
@@ -140,9 +146,12 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const current = getChat(db, project.id, fresh.id)!
     // Le Worker qui detient le dossier et la conversation Claude est reutilise ; s'il n'existe plus, un autre prend le relais (nouvelle conversation, meme branche).
     const sessionId = current.worker_id ? current.session_id : null
+    // Maquette : le depot minimal (UI_TEMPLATE_REPO), dans un dossier propre a ce chat, jamais pousse. Sinon : le depot GitHub du projet.
+    const where = concept
+      ? { project: `concept-${current.id}`, url: `https://github.com/${config.uiTemplateRepo}.git`, push: false, mode: 'concept' }
+      : { project: project.slug, url: `https://github.com/${project.github_repo}.git`, push: true, mode: 'project' }
     const jobId = hub.enqueue(a.user.id, 'ai.chat', {
-      project: project.slug, url: `https://github.com/${project.github_repo}.git`, branch: current.branch, prompt, sessionId, push: true,
-      model: model || null, effort: effort || null,
+      ...where, branch: current.branch, prompt, sessionId, model: model || null, effort: effort || null,
     }, { workerId: current.worker_id, requires: CHAT_REQUIRES })
     addExchange(db, current.id, prompt, jobId)
     return wantsJson(c) ? c.json({ ok: true }) : c.redirect(back, 303)
@@ -170,6 +179,7 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const g = await guard(c, { post: true, chat: true })
     if ('res' in g) return g.res
     for (const jobId of pendingJobIds(db, g.chat!.id)) hub.cancel(g.a.user.id, jobId) // une reponse en cours est arretee
+    deletePreviewsOfJobs(db, allJobIds(db, g.chat!.id)) // paquets d'apercu : lignes et fichiers
     deleteChat(db, g.project.id, g.chat!.id)
     return c.redirect(`/projects/${g.project.id}/chats`, 303)
   })

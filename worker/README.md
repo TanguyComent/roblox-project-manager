@@ -53,6 +53,10 @@ pousse la branche, et renvoie la reponse, les commits et le diff. Pendant l'exec
 Le prompt passe par l'entree standard ; les droits de l'IA sont limites par un fichier de reglages : lecture / edition de fichiers, recherche et `git` (sans `push` ni `remote`), pas de reseau,
 et tout ce qui demanderait une autorisation est refuse (`--permission-prompts none`). Modifier `DEFAULT_ALLOW` / `DEFAULT_DENY` dans `src/ai.ts` pour changer ces droits.
 
+
+## Apercus d'interface
+
+Quand la reponse de l'IA contient un bloc ```rpm-ui, le Worker construit l'apercu de la story avec l'emulateur (`../ui-emulator`, `npm ci` une fois) et l'envoie au Host ; si la story echoue ou s'affiche vide, l'IA est relancee **une fois** avec l'erreur (`fixRounds`). Le plugin `../ui-framework/plugin` (skill `rpm-ui`) est charge a chaque requete (`--plugin-dir`). Le Worker annonce l'outil « Apercus UI » quand l'emulateur est installe. Details : [`../ui-framework/README.md`](../ui-framework/README.md).
 ## Configuration : `worker/.env`
 
 Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :

@@ -195,6 +195,27 @@ const MIGRATIONS = [
    ALTER TABLE chats ADD COLUMN model TEXT;
    ALTER TABLE chats ADD COLUMN effort TEXT;
    ALTER TABLE chats ADD COLUMN seen_message_id INTEGER NOT NULL DEFAULT 0;`,
+  // 11 : apercus d'interface (paquets de l'emulateur d'UI deposes par les Workers) et chats « maquette »
+  `ALTER TABLE chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'project' CHECK (mode IN ('project', 'concept'));
+   CREATE TABLE previews (
+     id TEXT PRIMARY KEY,              -- 128 bits aleatoires : l'adresse de l'apercu en est la seule cle d'acces (voir preview-routes.ts)
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+     n INTEGER NOT NULL,               -- rang du bloc rpm-ui dans la reponse
+     title TEXT NOT NULL,
+     file TEXT NOT NULL,
+     viewport TEXT NOT NULL,
+     ok INTEGER NOT NULL,
+     error TEXT,
+     checked INTEGER NOT NULL DEFAULT 0,
+     nodes INTEGER NOT NULL DEFAULT 0,
+     errors_json TEXT NOT NULL DEFAULT '[]',
+     missing_json TEXT NOT NULL DEFAULT '[]',
+     bytes INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     UNIQUE (job_id, n)
+   );
+   CREATE INDEX previews_user ON previews(user_id);`,
 ]
 
 export function openDb(file?: string): Db {

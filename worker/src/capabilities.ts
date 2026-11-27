@@ -3,6 +3,7 @@
 import { exec } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { WORKER_DIR } from './config.ts'
 import type { Capability } from './protocol.ts'
 
 export type Runner = (command: string) => Promise<string | null>
@@ -56,6 +57,8 @@ export const TOOLS: Tool[] = [
       return ['/usr/bin/blender', '/snap/bin/blender', '/var/lib/flatpak/exports/bin/org.blender.Blender']
     },
   },
+  // Apercus d'interface : l'emulateur d'UI du depot est installe (npm ci dans ui-emulator) et un navigateur sans fenetre permet de le controler.
+  { id: 'ui-preview', label: 'Apercus UI', files: () => [join(WORKER_DIR, '..', 'ui-emulator', 'node_modules', 'vite', 'package.json')] },
   {
     id: 'studio', label: 'Roblox Studio',
     files: (d) => {

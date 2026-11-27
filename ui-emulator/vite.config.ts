@@ -22,7 +22,8 @@ loadDotEnv(`${HERE}/.env`)
 // Un PROFIL decrit le projet Roblox a emuler (lu en lecture seule, jamais modifie) :
 //   RBX_PROFILE=dont-fish | giant-tower   (voir profiles/*.json)
 const PROFILE = process.env.RBX_PROFILE ?? 'dont-fish'
-const profile = JSON.parse(fs.readFileSync(`${HERE}/profiles/${PROFILE}.json`, 'utf8'))
+// RBX_PROFILE_FILE : profil donne par un fichier (genere a la volee pour construire l'apercu d'un depot, voir « Paquet d'apercu » dans le README).
+const profile = JSON.parse(fs.readFileSync(process.env.RBX_PROFILE_FILE ?? `${HERE}/profiles/${PROFILE}.json`, 'utf8'))
 const PROJECT: string = (process.env.RBX_PROJECT ?? profile.project).replace(/\\/g, '/')
 const shim = (n: string) => `${HERE}/src/shims/${n}`
 
@@ -84,6 +85,7 @@ function baseUrlResolver(): Plugin {
 // Liste des stories (*.story.tsx) : generee depuis le disque a partir des dossiers du profil.
 function storiesIndex(): Plugin {
   const VIRT = 'virtual:stories'
+  const ONLY = process.env.RBX_ONLY
   const ignore = new Set<string>(['node_modules', 'out', 'include', '.git', '.claude', ...(profile.ignore ?? [])])
   const walk = (dir: string, out: string[]) => {
     if (!fs.existsSync(dir)) return
@@ -104,6 +106,7 @@ function storiesIndex(): Plugin {
         for (const f of files.sort()) {
           const rel = f.slice(base.length + 1).replace(/\.story\.tsx?$/, '')
           const name = (root.label ? root.label + '/' : '') + rel
+          if (ONLY && name !== ONLY) continue // RBX_ONLY : paquet d'apercu d'UNE story (plus petit, sans la liste des autres)
           items.push(`{ name: ${JSON.stringify(name)}, load: () => import(${JSON.stringify(f)}) }`)
         }
       }
@@ -323,6 +326,8 @@ function projectOverrides(): Plugin {
 
 export default defineConfig({
   root: HERE,
+  base: process.env.RBX_BASE ?? '/',
+  build: { outDir: process.env.RBX_OUT ?? 'dist', emptyOutDir: true, sourcemap: false, chunkSizeWarningLimit: 4000 },
   plugins: [storiesIndex(), projectOverrides(), rootDirsResolver(), baseUrlResolver(), rbxCompat(), traceProjectNodeModules()],
   esbuild: { jsx: 'transform', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment' },
   resolve: {

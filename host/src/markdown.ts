@@ -22,22 +22,32 @@ export function renderInline(raw: string): string {
 const isTableSep = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l) && l.includes('-')
 const cells = (l: string) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
 
-export function renderMarkdown(src: string): string {
+export interface MarkdownOptions {
+  /**
+   * Rendu des blocs ```rpm-ui (apercus d'interface) : recoit le rang du bloc (0, 1, 2...) et son contenu brut, renvoie du HTML SUR (a la charge de l'appelant).
+   * Numerotation identique a celle du Worker (worker/src/preview.ts, scanFences) : seuls les blocs de code de premier niveau comptent.
+   */
+  uiBlock?: (n: number, raw: string) => string
+}
+
+export function renderMarkdown(src: string, opts: MarkdownOptions = {}): string {
   const lines = String(src).replace(/\r\n?/g, '\n').split('\n')
   const out: string[] = []
   let i = 0
+  let uiN = 0
   const startsBlock = (l: string) => /^(```|#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|>\s?|\s*---+\s*$)/.test(l)
 
   while (i < lines.length) {
     const line = lines[i]
     if (!line.trim()) { i++; continue }
 
-    const fence = /^```(\w[\w+-]*)?\s*$/.exec(line)
+    const fence = /^```([\w+-]*)[ \t]*$/.exec(line)
     if (fence) {
       const code: string[] = []
       i++
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) code.push(lines[i++])
+      while (i < lines.length && !/^```[ \t]*$/.test(lines[i])) code.push(lines[i++])
       i++ // fence fermante (absente : le bloc va jusqu'a la fin)
+      if (fence[1] === 'rpm-ui' && opts.uiBlock) { out.push(opts.uiBlock(uiN++, code.join('\n'))); continue }
       out.push(`<pre class="code md-code"><code>${esc(code.join('\n'))}</code></pre>`)
       continue
     }

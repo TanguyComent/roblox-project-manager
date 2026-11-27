@@ -20,6 +20,7 @@ import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
 import { projectRoutes } from './project-routes.ts'
 import { chatRoutes } from './chat-routes.ts'
+import { previewRoutes } from './preview-routes.ts'
 import { workerRoutes } from './worker-routes.ts'
 import { WorkerHub } from './worker-hub.ts'
 import { loginPage, mfaPage, recoveryPage, registerPage, setupPage } from './views.ts'
@@ -54,7 +55,8 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   // --- en-tetes de securite -------------------------------------------------------------------------------------------------
   app.use('*', async (c, next) => {
     await next()
-    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+    if (c.req.path.startsWith('/preview/')) return // les apercus d'interface portent leur propre politique (voir preview-routes.ts)
+    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'same-origin')
     c.header('X-Frame-Options', 'DENY')
@@ -65,11 +67,13 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   // 16 Ko partout, sauf les messages de chat (jusqu'a 20 000 caracteres, soit 80 Ko en UTF-8).
   const smallBody = bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
   const chatBody = bodyLimit({ maxSize: 100 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
-  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : smallBody(c, next)))
+  const previewBody = bodyLimit({ maxSize: 24 * 1024 * 1024, onError: (c) => c.json({ error: 'Apercu trop gros.' }, 413) }) // 12 Mo de fichiers en base64
+  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : c.req.path === '/api/worker/previews' ? previewBody(c, next) : smallBody(c, next)))
 
   // --- controle d'origine : toute requete qui modifie l'etat doit venir de ce site ----------------------------------------------
   app.use('*', async (c, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
+    if (c.req.path.startsWith('/api/worker/')) return next() // appels des Workers : jeton en Authorization, ni cookie ni navigateur (voir preview-routes.ts)
     const origin = c.req.header('origin')
     const fetchSite = c.req.header('sec-fetch-site')
     let ok = false
@@ -159,6 +163,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   const hub = opts.hub ?? new WorkerHub(db)
   workerRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
   chatRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
+  previewRoutes(app, { db })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {

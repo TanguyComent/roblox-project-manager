@@ -22,7 +22,10 @@ const side = $('side'), bar = $('bar'), errBox = $('err'), vp = $('viewport')
 
 const params = new URLSearchParams(location.search)
 ;(window as any).__logEv = !!params.get('events') // ?events=1 : journalise les evenements d'entree (diagnostic)
-let current = params.get('story') ?? ''
+// Mode integre (?embed=1) : apercu dans un cadre du chat, sans liste de stories. Un paquet d'apercu ne contient qu'UNE story : elle est ouverte d'office.
+const embed = !!params.get('embed')
+if (embed) document.body.classList.add('embed')
+let current = params.get('story') ?? (entries.length === 1 ? entries[0].name : '')
 let vpName = params.get('vp') ?? (meta as any)?.viewport ?? 'Desktop'
 let controlValues: Record<string, any> = {}
 let dispose: (() => void) | null = null

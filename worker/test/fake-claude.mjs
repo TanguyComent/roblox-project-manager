@@ -28,8 +28,14 @@ emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'Je vais aj
 const n = Date.now()
 writeFileSync(`ia-${n}.txt`, prompt.includes('MODIFIE') ? 'v2' : 'contenu')
 if (!prompt.includes('LEAVE_DIRTY')) { git('add', '.'); git('commit', '-q', '-m', 'Travail de l\'IA') }
+// Aperçu d'UI : « UIFILE=<story> » dans le prompt -> un bloc rpm-ui ; au retour automatique, une story qui marche.
+let text = 'Fait : un fichier ajoute.'
+const ui = /UIFILE=(\S+)/.exec(prompt)
+const block = (file) => '\n\n```rpm-ui\n' + JSON.stringify({ file, viewport: 'Telephone', title: 'Essai' }) + '\n```'
+if (prompt.includes('[Retour automatique]')) text = 'Corrige.' + block('src/ok.story.tsx')
+else if (ui) text += block(ui[1])
 emit({
-  type: 'result', subtype: 'success', is_error: false, result: 'Fait : un fichier ajoute.',
+  type: 'result', subtype: 'success', is_error: false, result: text,
   session_id: flag('--resume') ?? '11111111-2222-3333-4444-555555555555', total_cost_usd: 0.012, duration_ms: 42, num_turns: 3,
 })
 emit({ type: 'system', subtype: 'task_summary', detail: null })

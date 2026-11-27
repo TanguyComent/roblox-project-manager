@@ -12,6 +12,8 @@ export const config = {
   allowSignup: env.ALLOW_SIGNUP === 'true',
   trustProxy: env.TRUST_PROXY === 'true', // true seulement derriere un reverse proxy qui pose X-Forwarded-For
   appName: env.APP_NAME ?? 'Roblox Project Manager',
+  // Depot minimal (« proprietaire/depot ») dont partent les chats « maquette » d'interface : kit de composants, sans le reste d'un jeu.
+  uiTemplateRepo: env.UI_TEMPLATE_REPO ?? 'boiler-co/Boilr-Template',
   get secureCookies() { return this.publicUrl.startsWith('https://') },
 }
 

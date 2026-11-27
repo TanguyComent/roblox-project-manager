@@ -69,3 +69,13 @@ Les modules non doublés ne plantent pas : ils sont signalés dans le bilan (`mi
 - Les images `rbxassetid` s'affichent en blocs hachurés ; les polices sont des remplacements ; pas de 3D (`ViewportFrame`, modèles).
 - Pas de clavier, manette ni saisie de texte (`TextBox`).
 - Les projets en Luau pur ne sont pas supportés : il faut du TypeScript (roblox-ts).
+
+## Paquet d'apercu (integration au chat)
+
+`tools/preview.mjs` construit l'emulateur en **site statique pour UNE story** et la verifie dans un navigateur sans fenetre :
+
+```powershell
+node tools/preview.mjs --project <depot> --file src/client/UI/gui/hud/hud.story.tsx --out <dossier> [--viewport Telephone] [--no-check]
+```
+
+Il ecrit `<dossier>/index.html` + `assets/` (+ `thumb.png` si un Edge/Chrome est disponible) et affiche en derniere ligne un objet JSON `{ ok, name, bytes, checked, nodes, errors, missing, thumb }`. Le tsconfig le plus proche de la story fournit les alias, la story doit etre dans le depot (pas de `..`, pas de lien qui en sort), rien du projet n'est copie. En dessous : les variables que `vite.config.ts` comprend (`RBX_PROFILE_FILE` profil donne par fichier, `RBX_ONLY` story unique, `RBX_BASE=./`, `RBX_OUT`) ; `?embed=1` masque la liste des stories (cadre du chat).

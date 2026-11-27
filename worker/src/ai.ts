@@ -4,15 +4,22 @@
 // Securite : le prompt passe par l'entree standard (jamais dans la ligne de commande), les autres arguments sont constants ou valides, et les droits
 // de l'IA sont limites par un fichier de reglages (lecture / edition de fichiers + git hors push) ; tout ce qui demanderait une autorisation est refuse.
 import { spawn, execFile } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Git } from './git.ts'
 import { GitError } from './git.ts'
 import { JobCancelled, type JobContext, type JobHandler } from './jobs.ts'
+import { buildPreviews, fixRequest, type PreviewResult } from './preview.ts'
+import { WORKER_DIR } from './config.ts'
 
 export interface AiOptions {
   git: Git
+  /** Dossier de l'emulateur d'UI (par defaut ../ui-emulator) et du plugin Claude qui apprend a l'IA a construire et afficher des UI (par defaut ../ui-framework/plugin). */
+  emulatorDir?: string
+  pluginDir?: string
+  /** Passes de correction automatique quand un apercu echoue (0 = aucune). */
+  fixRounds?: number
   /** Commande du CLI (par defaut `claude`). Les tests y mettent un faux CLI. */
   claude?: { cmd: string; args: string[] }
   timeoutMs?: number
@@ -154,9 +161,14 @@ function runClaude(cmd: string, args: string[], cwd: string, prompt: string, ctx
   })
 }
 
-const contextBlock = (branch: string) => `[Contexte automatique]
+const CONCEPT = `Ce chat est une MAQUETTE d'interface : le depot est un modele minimal, rien n'y est reel. Remplis tout avec de fausses donnees plausibles (noms, nombres, listes) ;
+ne cherche jamais de donnees de jeu reelles. Cree ta story dans le dossier des interfaces du depot.`
+
+const contextBlock = (branch: string, mode: string) => `[Contexte automatique]
 Tu travailles dans un depot git, sur la branche « ${branch} » qui t'est dediee. Ne change jamais de branche.
 Commite ton travail avec des messages clairs (git add / git commit) ; ne fais pas de git push, c'est fait automatiquement ensuite.
+${mode === 'concept' ? `${CONCEPT}\n` : ''}Pour MONTRER une interface a l'utilisateur dans le chat, termine ta reponse par un bloc de code \`\`\`rpm-ui contenant {"file": "<chemin de la story depuis la racine du depot>", "viewport": "UI Labs|Desktop|Tablette|Telephone", "title": "<titre>"} ;
+le chat affiche alors un apercu interactif. Le skill rpm-ui explique comment construire une UI avec les composants du depot et comment ecrire la story : utilise-le.
 A la fin, resume en quelques phrases ce que tu as fait.
 
 [Demande]
@@ -187,18 +199,39 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         const git = (args: string[]) => o.git.exec(project, branch, args, ctx)
         const startHead = (await git(['rev-parse', 'HEAD'])).trim()
 
-        // 2. Claude, avec des droits limites
+        // 2. Claude, avec des droits limites ; puis les apercus d'UI qu'il demande, avec UNE passe de correction automatique si l'un d'eux echoue
         const dir = mkdtempSync(join(tmpdir(), 'rpm-claude-'))
+        const mode = field(ctx.payload, 'mode') === 'concept' ? 'concept' : 'project'
+        const pluginDir = o.pluginDir ?? join(WORKER_DIR, '..', 'ui-framework', 'plugin')
         let result: ClaudeResult
+        let previews: PreviewResult[] = []
+        let fixed = false
         try {
           const settings = join(dir, 'settings.json')
           writeFileSync(settings, JSON.stringify({ permissions: { allow: o.allow ?? DEFAULT_ALLOW, deny: o.deny ?? DEFAULT_DENY } }))
-          const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings]
-          if (sessionId) args.push('--resume', sessionId as string)
-          if (model) args.push('--model', model as string)
-          if (effort) args.push('--effort', effort as string)
+          const turn = async (text: string, resume: string | null) => {
+            const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings]
+            if (existsSync(join(pluginDir, '.claude-plugin', 'plugin.json'))) args.push('--plugin-dir', pluginDir)
+            if (resume) args.push('--resume', resume)
+            if (model) args.push('--model', model as string)
+            if (effort) args.push('--effort', effort as string)
+            return parseClaudeOutput(await runClaude(claude.cmd, args, cwd, text, ctx, o.timeoutMs ?? 30 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, cwd)) ctx.event('info', s.text, s.kind) }))
+          }
+          const build = (text: string) => (ctx.uploadPreview
+            ? buildPreviews(text, { project: cwd, emulatorDir: o.emulatorDir, upload: ctx.uploadPreview, signal: ctx.signal, event: ctx.event })
+            : Promise.resolve([] as PreviewResult[]))
           ctx.event('info', sessionId ? 'Claude reprend la conversation…' : 'Claude demarre…')
-          result = parseClaudeOutput(await runClaude(claude.cmd, args, cwd, contextBlock(branch) + prompt, ctx, o.timeoutMs ?? 30 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, cwd)) ctx.event('info', s.text, s.kind) }))
+          result = await turn(contextBlock(branch, mode) + prompt, sessionId as string | null)
+          previews = await build(result.text)
+          const problems = fixRequest(previews)
+          if (problems && result.sessionId && (o.fixRounds ?? 1) > 0) {
+            ctx.event('info', "Un apercu pose probleme : l'IA le corrige…")
+            const first = result
+            result = await turn(`[Retour automatique]\nLes apercus demandes ont ces problemes :\n${problems}\nCorrige la story (ou les composants), puis montre-la de nouveau avec un bloc rpm-ui.`, first.sessionId)
+            result = { ...result, sessionId: result.sessionId ?? first.sessionId, costUsd: (first.costUsd ?? 0) + (result.costUsd ?? 0), durationMs: (first.durationMs ?? 0) + (result.durationMs ?? 0), turns: (first.turns ?? 0) + (result.turns ?? 0) }
+            previews = await build(result.text)
+            fixed = true
+          }
         } finally { rmSync(dir, { recursive: true, force: true }) }
 
         // 3. ce qui a change : un travail oublie en cours de route est commite pour ne rien perdre
@@ -228,6 +261,7 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
           text: result.text, sessionId: result.sessionId, costUsd: result.costUsd, durationMs: result.durationMs, turns: result.turns,
           project, branch, path: prep.path, newBranch: prep.newBranch, startHead: startHead.slice(0, 8), head: head.slice(0, 8),
           commits, diffStat, diff, leftoverFiles: leftover, pushed, pushError,
+          previews: previews.map((p) => ({ n: p.n, title: p.title, file: p.file, viewport: p.viewport, ok: p.ok, error: p.error, previewId: p.previewId, nodes: p.nodes, errors: p.errors, missing: p.missing })), previewFixed: fixed,
         }
       })
     },
