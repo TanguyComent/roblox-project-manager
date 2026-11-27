@@ -444,3 +444,10 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .lib-rename { display: inline-block; margin-left: 8px; font-size: 12px; font-weight: 400; }
 .lib-rename form { display: flex; gap: 6px; margin-top: 6px; }
 .lib-rename input { min-width: 0; }
+.rbx { margin-top: 4px; font-size: 12.5px; }
+.rbx.ok code { color: #7fe3b0; }
+.rbx.wait { color: var(--accent); }
+.rbx-form { display: grid; gap: 6px; }
+.rbx-form select { min-width: 0; }
+.lib-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; font-size: 13px; color: var(--text2); }
+.lib-settings label { display: flex; align-items: center; gap: 6px; }

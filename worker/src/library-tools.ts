@@ -4,8 +4,8 @@
 //
 // Reference d'une image dans le code d'une interface : `rbxassetid://<id>` si elle est deja publiee sur Roblox, sinon `rbxlib://<id de la bibliotheque>` (provisoire :
 // l'emulateur sait l'afficher grace a `_library/index.json`, qui lie chaque reference a son fichier ; elle sera publiee et remplacee a l'integration dans le projet).
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { join, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { JobContext } from './jobs.ts'
 import { text, type ToolDef, type ToolResult } from './tools.ts'
@@ -20,7 +20,9 @@ export interface LibraryEntry {
 }
 
 export interface LibraryToolsState {
-  ctx: Pick<JobContext, 'signal' | 'event' | 'searchLibrary' | 'downloadLibraryImage'>
+  ctx: Pick<JobContext, 'signal' | 'event' | 'searchLibrary' | 'downloadLibraryImage' | 'publishLibrary'>
+  /** Le projet du chat : la branche de travail est-elle ouverte (integration) et ou ? */
+  project?: () => { open: boolean; dir: string | null }
   /** Dossier de l'atelier de ce chat. */
   atelier: string
 }
@@ -61,6 +63,43 @@ function remember(dir: string, e: LibraryEntry, file: string) {
   writeFileSync(f, JSON.stringify(index, null, 1))
 }
 
+const CODE = /\.(tsx?|jsx?|luau?|json)$/i
+const SKIP = new Set(['.git', 'node_modules', 'out', 'dist', 'include', 'Packages'])
+const REF = /rbxlib:\/\/([0-9a-f]{32})/g
+
+/** Fichiers de code du projet (bornes : nombre et taille). */
+function codeFiles(dir: string): string[] {
+  const out: string[] = []
+  const walk = (d: string) => {
+    if (out.length >= 3000) return
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (e.isSymbolicLink()) continue
+      const p = join(d, e.name)
+      if (e.isDirectory()) { if (!SKIP.has(e.name)) walk(p) } else if (e.isFile() && CODE.test(e.name) && statSync(p).size <= 1_000_000) out.push(p)
+    }
+  }
+  walk(dir)
+  return out
+}
+
+/** Remplace des references dans les fichiers du projet ; renvoie les fichiers modifies (chemins relatifs). */
+export function replaceReferences(dir: string, map: Map<string, string>): string[] {
+  const changed: string[] = []
+  for (const f of codeFiles(dir)) {
+    const src = readFileSync(f, 'utf8')
+    const next = src.replace(REF, (m, id: string) => map.get(id) ?? m)
+    if (next !== src) { writeFileSync(f, next); changed.push(f.slice(dir.length + 1).split(sep).join('/')) }
+  }
+  return changed
+}
+
+/** Identifiants des images de la bibliotheque referencees (rbxlib://) dans le projet. */
+export function referencedIds(dir: string): Set<string> {
+  const ids = new Set<string>()
+  for (const f of codeFiles(dir)) for (const m of readFileSync(f, 'utf8').matchAll(REF)) ids.add(m[1])
+  return ids
+}
+
 export function libraryTools(s: LibraryToolsState): ToolDef[] {
   const cache = new Map<string, LibraryEntry>()
   const unavailable = () => text("La bibliotheque d'images n'est pas disponible sur ce Worker.", true)
@@ -87,6 +126,34 @@ export function libraryTools(s: LibraryToolsState): ToolDef[] {
       for (const h of hits) cache.set(h.id, h)
       if (!hits.length) return text(`Aucune image trouvee${q.query ? ` pour « ${q.query} »` : ''}. Essaie d'autres mots, retire un filtre, ou liste sans rien. Sinon, dessine l'element avec des composants de l'interface.`)
       return text(`${hits.length} image(s) :\n${hits.map(line).join('\n')}\n\nPour en utiliser une, appelle library_get avec son id.`)
+    },
+  }
+
+  const publish: ToolDef = {
+    name: 'library_publish',
+    description: "Publie sur Roblox les images de la bibliotheque utilisees dans le PROJET (references rbxlib://...), puis remplace ces references par les vrais rbxassetid://... dans le code. "
+      + "A appeler a l'INTEGRATION d'un concept valide, une fois la branche du projet ouverte et le code ecrit, AVANT de montrer le resultat final. Sans argument, publie toutes les images referencees dans le projet. "
+      + "Si une image est en cours de moderation, refusee, ou demande la confirmation de l'utilisateur (reglage ou image generee), la reference rbxlib:// reste : dis-le clairement dans ta reponse.",
+    inputSchema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' }, description: 'Identifiants des images (facultatif : par defaut toutes celles referencees dans le projet).' } } },
+    async run(args): Promise<ToolResult> {
+      if (!s.ctx.publishLibrary) return unavailable()
+      const p = s.project?.()
+      if (!p?.open || !p.dir) return text("La publication sur Roblox ne se fait qu'a l'integration dans le projet : ouvre d'abord la branche de travail (outil project, action open_branch) et ecris le code qui utilise l'image.", true)
+      const used = referencedIds(p.dir)
+      const wanted = Array.isArray(args.ids) ? args.ids.filter((x): x is string => typeof x === 'string').map((x) => x.trim().toLowerCase()) : [...used]
+      const ids = [...new Set(wanted)].filter((id) => /^[0-9a-f]{32}$/.test(id))
+      const notUsed = ids.filter((id) => !used.has(id))
+      if (notUsed.length) return text(`Ces images ne sont referencees (rbxlib://) nulle part dans le projet : ${notUsed.join(', ')}. N'en publie que celles que le code utilise.`, true)
+      if (!ids.length) return text('Aucune reference rbxlib:// dans le projet : rien a publier.')
+      let results: { id: string; status: string; reference: string | null; error: string | null }[]
+      try {
+        const body = await s.ctx.publishLibrary(ids) as { results?: unknown }
+        results = (Array.isArray(body.results) ? body.results : []).flatMap((r) => (isObj(r) && typeof r.id === 'string' ? [{ id: r.id, status: String(r.status), reference: typeof r.reference === 'string' && /^rbxassetid:\/\/\d{1,20}$/.test(r.reference) ? r.reference : null, error: typeof r.error === 'string' ? r.error.slice(0, 200) : null }] : []))
+      } catch (e) { return text(`Publication impossible : ${e instanceof Error ? e.message.slice(0, 200) : 'erreur'}`, true) }
+      const map = new Map(results.filter((r) => r.status === 'published' && r.reference).map((r) => [r.id, r.reference!]))
+      const changed = map.size ? replaceReferences(p.dir, map) : []
+      const lines = results.map((r) => `- ${r.id} : ${r.status === 'published' ? `publiee → ${r.reference}` : r.status === 'publishing' ? 'en cours de moderation chez Roblox (reference rbxlib:// conservee ; rappelle library_publish plus tard)' : r.status === 'needs-confirmation' ? "a confirmer par l'utilisateur dans la bibliotheque (reference rbxlib:// conservee)" : `ECHEC : ${r.error ?? 'erreur'} (reference rbxlib:// conservee : propose une autre image)`}`)
+      return text(`${map.size} image(s) publiee(s) sur ${results.length}.\n${lines.join('\n')}${changed.length ? `\nReferences remplacees dans : ${changed.slice(0, 20).join(', ')}` : ''}\nIndique a l'utilisateur ce qui a ete publie et ce qui reste a faire.`)
     },
   }
 
@@ -126,5 +193,5 @@ export function libraryTools(s: LibraryToolsState): ToolDef[] {
       } catch (err) { return text(`Recuperation impossible : ${err instanceof Error ? err.message.slice(0, 160) : 'erreur'}`, true) }
     },
   }
-  return [search, get]
+  return [search, get, publish]
 }

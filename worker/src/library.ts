@@ -165,3 +165,13 @@ export function libraryHandlers(o: LibraryOptions = {}): Record<string, JobHandl
     },
   }
 }
+
+/** Demande au Host de publier ces images sur Roblox (le Host tient la cle, applique le reglage de l'utilisateur et choisit le proprietaire d'apres le projet du chat). */
+export async function publishLibrary(hostUrl: string, token: string, ids: string[], fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const res = await fetchImpl(new URL('/api/worker/library-publish', hostUrl), {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ ids }), signal: AbortSignal.timeout(120_000),
+  })
+  const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+  if (!res.ok) throw new Error(typeof body.error === 'string' ? body.error : `refuse par le Host (${res.status})`)
+  return body
+}

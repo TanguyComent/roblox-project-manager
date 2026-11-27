@@ -1,5 +1,6 @@
 // Page « Bibliotheque » : images en attente, puis images triees regroupees par scope, par style ou par sujet (trois visions de la meme bibliotheque).
 import { ratioKind, type LibraryImage } from './library.ts'
+import { FORMATS, type TargetOption } from './library-publish.ts'
 import { alert, appPage, csrfField, esc, type Viewer } from './views.ts'
 
 export type Group = 'scope' | 'style' | 'subject'
@@ -9,7 +10,17 @@ export const groupOf = (v: unknown): Group => (v === 'style' || v === 'subject' 
 const fmtSize = (n: number) => (n < 1024 ? `${n} o` : n < 1048576 ? `${Math.round(n / 1024)} Ko` : `${(n / 1048576).toFixed(1)} Mo`)
 const chips = (csv: string, cls = 'tag') => (csv ? csv.split(',').map((t) => `<span class="${cls}">${esc(t)}</span>`).join('') : '')
 
-const card = (img: LibraryImage, csrf: string) => {
+const robloxLine = (img: LibraryImage, csrf: string, targets: TargetOption[]) => {
+  if (img.status !== 'sorted') return ''
+  if (img.roblox_status === 'published') return `<div class="rbx ok"><strong>Roblox</strong> <code>rbxassetid://${esc(img.roblox_asset_id ?? '')}</code>${img.published_by ? ` <span class="muted small">(${esc(img.published_by)})</span>` : ''}</div>`
+  if (img.roblox_status === 'publishing') return '<div class="rbx wait">Publication en cours (moderation Roblox)…</div>'
+  const form = !FORMATS[img.mime] ? '<span class="muted small">Format non publiable sur Roblox (PNG ou JPEG seulement).</span>'
+    : !targets.length ? '<span class="muted small">Lie un compte Roblox a un projet pour publier.</span>'
+    : `<form method="post" action="/library/${img.id}/publish" class="rbx-form">${csrfField(csrf)}<select name="target" aria-label="Publier sur">${targets.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}</select><button type="submit">Publier sur Roblox</button></form>`
+  return `<div class="rbx">${img.roblox_status === 'failed' && img.roblox_error ? `<p class="alert error small">${esc(img.roblox_error)}</p>` : ''}${form}</div>`
+}
+
+const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = []) => {
   const status = img.status === 'sorting' ? '<span class="chip accent">Tri en cours…</span>' : img.status === 'pending' ? '<span class="chip">En attente</span>' : ''
   const locked = img.status === 'sorting'
   const sorted = img.status === 'sorted'
@@ -28,6 +39,7 @@ const card = (img: LibraryImage, csrf: string) => {
     ${img.colors ? `<div class="tags colors">${chips(img.colors, 'tag color')}</div>` : ''}
     ${img.traits ? `<div class="tags">${chips(img.traits)}</div>` : ''}
     <div class="muted small">${img.width ? `${img.width}×${img.height}${ratio ? ` (${ratio})` : ''} · ` : ''}${fmtSize(img.size)} · ${esc(img.mime.replace('image/', '').toUpperCase())}${img.source === 'generated' ? ' · generee' : ''}${img.origin ? ` · ${esc(img.origin)}` : ''}${img.roblox_status === 'published' ? ` · Roblox ${esc(img.roblox_asset_id ?? '')}` : ''}</div>
+    ${robloxLine(img, csrf, targets)}
     ${locked ? '' : `<details class="lib-edit"><summary>Modifier</summary>
       <form method="post" action="/library/${img.id}/edit">${csrfField(csrf)}
         <label>Nom <input type="text" name="title" maxlength="60" value="${esc(sorted ? img.title : '')}" placeholder="${esc(img.title)}"></label>
@@ -48,12 +60,12 @@ const card = (img: LibraryImage, csrf: string) => {
 }
 
 /** Contenu de la grille (renvoye tel quel par /library/live). `group` : la facette qui regroupe les images triees. */
-export function libraryGridHtml(images: LibraryImage[], csrf: string, group: Group = 'scope'): string {
+export function libraryGridHtml(images: LibraryImage[], csrf: string, group: Group = 'scope', targets: TargetOption[] = []): string {
   if (!images.length) return '<div class="hello"><h2>Ta bibliotheque est vide</h2><p>Ajoute des images (icones, fonds, personnages...) : une IA les decrira (scope, style, sujet, couleurs) pour que les agents qui construisent tes interfaces puissent les retrouver.</p></div>'
   const waiting = images.filter((i) => i.status !== 'sorted')
   const sorted = images.filter((i) => i.status === 'sorted')
   const parts: string[] = []
-  if (waiting.length) parts.push(`<section><h2>En attente <span class="count">${waiting.length}</span></h2><div class="lib-grid">${waiting.map((i) => card(i, csrf)).join('')}</div></section>`)
+  if (waiting.length) parts.push(`<section><h2>En attente <span class="count">${waiting.length}</span></h2><div class="lib-grid">${waiting.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
   const key = (i: LibraryImage) => i[group] || '(non defini)'
   const names = [...new Set(sorted.map(key))].sort()
   for (const n of names) {
@@ -62,12 +74,12 @@ export function libraryGridHtml(images: LibraryImage[], csrf: string, group: Gro
       <form method="post" action="/library/rename">${csrfField(csrf)}<input type="hidden" name="facet" value="${group}"><input type="hidden" name="from" value="${esc(n)}">
         <input type="text" name="to" maxlength="40" value="${esc(n)}" aria-label="Nouveau nom" required><button type="submit">Renommer</button></form>
       <p class="muted small">Un nom deja existant fusionne les deux groupes.</p></details>`
-    parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i, csrf)).join('')}</div></section>`)
+    parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i, csrf, targets)).join('')}</div></section>`)
   }
   return parts.join('\n')
 }
 
-export interface LibraryPageData { images: LibraryImage[]; counts: { pending: number; sorting: number; sorted: number }; error?: string; noWorker: boolean; group: Group }
+export interface LibraryPageData { images: LibraryImage[]; counts: { pending: number; sorting: number; sorted: number }; error?: string; noWorker: boolean; group: Group; autoPublish: boolean; targets: TargetOption[] }
 
 export function libraryPage(o: Viewer & LibraryPageData) {
   const busy = o.counts.sorting > 0
@@ -83,10 +95,14 @@ export function libraryPage(o: Viewer & LibraryPageData) {
       ${busy ? `<form method="post" action="/library/sort/cancel">${csrfField(o.csrf)}<button type="submit">Annuler le tri</button></form>` : ''}
     </div>
   </header>
+  <form method="post" action="/library/settings" class="lib-settings">${csrfField(o.csrf)}
+    <label><input type="checkbox" name="auto_publish" value="1"${o.autoPublish ? ' checked' : ''}> Publier automatiquement sur Roblox les images utilisees quand une IA integre un concept valide dans un projet</label>
+    <button type="submit">Enregistrer</button>
+  </form>
   <nav class="lib-tabs" aria-label="Vue">${GROUPS.map((g) => `<a href="/library?group=${g.id}"${g.id === o.group ? ' class="active" aria-current="page"' : ''}>${g.label}</a>`).join('')}</nav>
   <div id="lib-error">${alert(o.error)}</div>
   ${o.noWorker && (o.counts.pending || busy) ? alert("Aucun Worker connecte ne dispose de Claude Code : le tri attendra qu'il y en ait un.") : ''}
   <div class="lib-drop" id="lib-drop" hidden>Depose tes images pour les ajouter</div>
-  <div id="lib-grid">${libraryGridHtml(o.images, o.csrf, o.group)}</div>
+  <div id="lib-grid">${libraryGridHtml(o.images, o.csrf, o.group, o.targets)}</div>
 </div>`, { scripts: ['library.js'] })
 }

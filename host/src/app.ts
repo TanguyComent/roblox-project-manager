@@ -169,9 +169,9 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   const hub = opts.hub ?? new WorkerHub(db)
   workerRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
   chatRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
-  libraryRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
+  libraryRoutes(app, { db, hub, roblox, html, form, csrfOk, requireFull: shared.requireFull })
   previewRoutes(app, { db })
-  attachmentRoutes(app, { db })
+  attachmentRoutes(app, { db, roblox })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {

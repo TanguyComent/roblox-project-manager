@@ -51,13 +51,15 @@ function getApiKey(db: Db, accountId: number): string {
 }
 
 // Cle utilisable : un compte dont Roblox ne reconnait plus la cle ne doit pas servir a verifier quoi que ce soit.
-function usableKey(db: Db, account: Pick<RobloxAccount, 'id' | 'status'>): string {
+export function usableKey(db: Db, account: Pick<RobloxAccount, 'id' | 'status'>): string {
   if (account.status !== 'ok') throw new RobloxError("La cle de ce compte Roblox n'est plus valide : mets-la a jour (page Compte).", 401)
   return getApiKey(db, account.id)
 }
 
 // --- permissions ---------------------------------------------------------------------------------------------------------------------
 export const scopeLabels = (scopes: KeyScope[]) => [...new Set(scopes.flatMap((s) => s.operations.length ? s.operations.map((o) => `${s.name}:${o}`) : [s.name]))].sort()
+/** La cle peut envoyer des images (API Assets). */
+export const canUploadAssets = (scopes: KeyScope[]) => scopes.some((s) => /^assets?$/.test(s.name) && s.operations.includes('write'))
 export const canPublish = (scopes: KeyScope[]) => scopes.some((s) => /universe-places/.test(s.name) && s.operations.includes('write'))
 export const EXPIRY_WARNING_MS = 14 * 24 * 3600_000
 

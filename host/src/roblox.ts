@@ -26,7 +26,14 @@ export class RobloxError extends Error {
   constructor(message: string, status: number) { super(message); this.status = status }
 }
 
+/** Etat d'une operation d'envoi d'asset : tant que `done` est faux, Roblox travaille ; ensuite `assetId` et le resultat de la moderation (asynchrone). */
+export interface AssetOperation { done: boolean; assetId: string | null; moderation: 'approved' | 'rejected' | 'reviewing' | 'unknown'; error: string | null }
+export interface ImageUpload { name: string; description: string; creator: { userId: string } | { groupId: string }; data: Buffer; contentType: 'image/png' | 'image/jpeg' }
+
 export interface RobloxClient {
+  /** Envoie une image comme asset de type Image (API Assets : permission asset:write). Renvoie l'identifiant de l'operation a interroger. */
+  createImageAsset(apiKey: string, up: ImageUpload): Promise<{ operationId: string }>
+  getAssetOperation(apiKey: string, operationId: string): Promise<AssetOperation>
   /** Informations sur une cle (valide ? expiree ? a qui ? quelles permissions ?). Leve RobloxError si Roblox ne la reconnait pas. */
   introspectKey(apiKey: string): Promise<KeyInfo>
   /** Nom d'utilisateur d'un compte Roblox (API publique) ; null si indisponible. */
@@ -83,6 +90,31 @@ export function createRobloxClient(opts: Options = {}): RobloxClient {
           universeIds: [...ids(s.universeIds), ...(s.universes ?? []).map((u) => String(u.universeId ?? '')), ...(s.universeDatastores ?? []).map((u) => String(u.universeId ?? ''))].filter(Boolean),
         })),
       }
+    },
+
+    async createImageAsset(apiKey, up) {
+      const creator = 'userId' in up.creator ? { userId: up.creator.userId } : { groupId: up.creator.groupId }
+      const request = { assetType: 'Image', displayName: up.name.slice(0, 50), description: up.description.slice(0, 1000), creationContext: { creator } }
+      const form = new FormData()
+      form.append('request', JSON.stringify(request))
+      form.append('fileContent', new Blob([new Uint8Array(up.data)], { type: up.contentType }), `image.${up.contentType === 'image/png' ? 'png' : 'jpg'}`)
+      const res = await doFetch(`${BASE}/assets/v1/assets`, { method: 'POST', headers: { 'x-api-key': apiKey, accept: 'application/json' }, body: form, signal: AbortSignal.timeout(60_000) })
+      if (!res.ok) throw await failure(res)
+      const j = (await res.json()) as { path?: string; operationId?: string }
+      const id = /operations\/([\w-]+)/.exec(j.path ?? '')?.[1] ?? (typeof j.operationId === 'string' ? j.operationId : '')
+      if (!id) throw new RobloxError("Roblox n'a pas renvoye d'operation pour cet envoi.", 502)
+      return { operationId: id }
+    },
+
+    async getAssetOperation(apiKey, operationId) {
+      if (!/^[\w-]{1,100}$/.test(operationId)) throw new RobloxError('Operation invalide.', 400)
+      const res = await doFetch(`${BASE}/assets/v1/operations/${operationId}`, { headers: { 'x-api-key': apiKey, accept: 'application/json' }, signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) throw await failure(res)
+      const j = (await res.json()) as { done?: boolean; error?: { message?: string }; response?: { assetId?: string | number; moderationResult?: { moderationState?: string } } }
+      const state = String(j.response?.moderationResult?.moderationState ?? '').toLowerCase()
+      const moderation = state.includes('reject') ? 'rejected' : state.includes('approv') ? 'approved' : state.includes('review') ? 'reviewing' : 'unknown'
+      const assetId = j.response?.assetId !== undefined && /^\d{1,20}$/.test(String(j.response.assetId)) ? String(j.response.assetId) : null
+      return { done: j.done === true, assetId, moderation, error: j.error?.message ? String(j.error.message).slice(0, 300) : null }
     },
 
     async getUsername(userId) {

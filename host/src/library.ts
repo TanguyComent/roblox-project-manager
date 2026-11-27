@@ -24,6 +24,7 @@ export interface LibraryImage {
   scope: string; style: string; traits: string; subject: string; colors: string; width: number; height: number; origin: string
   status: LibraryStatus; mime: string; size: number; sha256: string; sort_job_id: number | null
   source: 'upload' | 'generated'; roblox_status: 'unpublished' | 'publishing' | 'published' | 'failed'; roblox_asset_id: string | null
+  roblox_error: string | null; roblox_owner: string | null; published_by: string | null; published_at: number | null
   created_at: number; sorted_at: number | null
 }
 
@@ -131,7 +132,7 @@ function uniqueTitle(db: Db, userId: number, folder: string, title: string, exce
 
 // --- lecture ----------------------------------------------------------------------------------------------------------------------------
 
-const COLS = 'id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, created_at, sorted_at'
+const COLS = 'id, user_id, file_name, title, folder, description, tags, scope, style, traits, subject, colors, width, height, origin, status, mime, size, sha256, sort_job_id, source, roblox_status, roblox_asset_id, roblox_error, roblox_owner, published_by, published_at, roblox_op, roblox_account_id, created_at, sorted_at'
 
 export const listImages = (db: Db, userId: number) =>
   db.prepare(`SELECT ${COLS} FROM library_images WHERE user_id = ? ORDER BY CASE status WHEN 'sorted' THEN 1 ELSE 0 END, scope, title, created_at DESC, id`).all(userId) as unknown as LibraryImage[]

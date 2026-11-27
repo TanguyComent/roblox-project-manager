@@ -13,6 +13,8 @@ export interface JobContext {
   downloadLibraryImage?(id: string): Promise<Buffer>
   /** Cherche dans les images triees de la bibliotheque de l'utilisateur (outils des agents d'UI). */
   searchLibrary?(q: { query?: string; scope?: string; style?: string; subject?: string; color?: string; ratio?: string; id?: string; similar?: string }): Promise<unknown>
+  /** Demande au Host de publier des images de la bibliotheque sur Roblox (integration d'un concept dans le projet). */
+  publishLibrary?(ids: string[]): Promise<unknown>
   uploadPreview?(dir: string | null, meta: import('./preview.ts').PreviewMeta): Promise<string>
 }
 export type JobHandler = (ctx: JobContext) => Promise<unknown>

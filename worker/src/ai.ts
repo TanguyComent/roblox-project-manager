@@ -39,7 +39,7 @@ export interface AiOptions {
 export const DEFAULT_ALLOW = ['Read', 'Edit', 'Write', 'Glob', 'Grep', 'Bash(git *)']
 export const DEFAULT_DENY = ['Bash(git push *)', 'Bash(git push)', 'Bash(git * push *)', 'Bash(git * push)', 'Bash(git remote *)', 'Bash(git * remote *)', 'WebFetch', 'WebSearch']
 /** Nos outils (serveur « rpm », voir chat-tools.ts) : les seuls outils MCP autorises. */
-export const TOOL_ALLOW = ['mcp__rpm__ui_preview', 'mcp__rpm__project', 'mcp__rpm__library_search', 'mcp__rpm__library_get']
+export const TOOL_ALLOW = ['mcp__rpm__ui_preview', 'mcp__rpm__project', 'mcp__rpm__library_search', 'mcp__rpm__library_get', 'mcp__rpm__library_publish']
 
 const MAX_PROMPT = 20_000
 const MAX_DIFF = 30_000
@@ -218,7 +218,7 @@ Regles de travail :
 3. L'utilisateur te demande un CONCEPT, une MAQUETTE, une idee ou une UI a partir de zero : fais-la dans l'atelier avec de fausses donnees, VERIFIE-la avec l'outil ui_preview (tu vois la capture) et corrige jusqu'a ce que le rendu soit bon, montre-la avec un bloc rpm-ui (root "sandbox"), puis ARRETE-TOI : demande a l'utilisateur de valider le concept. N'implemente RIEN dans le projet avant sa validation.
 4. Une fois le concept valide (ou si l'utilisateur te demande directement de l'integrer) : ouvre la branche, integre-le dans le projet avec les vrais composants et les vraies donnees, verifie avec ui_preview (root "project"), puis montre le resultat.
 Tu n'as pas de shell general (seul git est autorise) : lis avec Read / Glob / Grep, ecris avec Write / Edit (Write cree les dossiers manquants : inutile de faire mkdir ou ls).
-IMAGES : l'utilisateur a une bibliotheque d'images (icones, fonds...). Des qu'une interface a besoin d'une image, appelle library_search AVANT d'en inventer une ; si une image convient, library_get la recupere (tu la vois) et te donne la reference EXACTE a mettre dans la propriete Image : recopie-la telle quelle.
+IMAGES : l'utilisateur a une bibliotheque d'images (icones, fonds...). Des qu'une interface a besoin d'une image, appelle library_search AVANT d'en inventer une ; si une image convient, library_get la recupere (tu la vois) et te donne la reference EXACTE a mettre dans la propriete Image : recopie-la telle quelle. Quand tu INTEGRES un concept valide dans le projet (branche ouverte), appelle library_publish : il publie sur Roblox les images utilisees et remplace les references provisoires rbxlib:// par les vrais rbxassetid:// dans le code ; n'ecris jamais un rbxassetid:// toi-meme.
 Pour MONTRER une interface a l'utilisateur, termine ta reponse par un bloc \`\`\`rpm-ui contenant {"file": "<story depuis la racine du depot>", "root": "sandbox|project", "viewport": "UI Labs|Desktop|Tablette|Telephone", "title": "<titre>"}. Le skill rpm-ui detaille tout : utilise-le.
 A la fin, resume en quelques phrases ce que tu as fait.
 
@@ -285,7 +285,7 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         // 3. Claude, avec des droits limites et NOS outils (capture d'UI, acces au projet) a l'exclusion de tout autre serveur d'outils de la machine
         const dir = mkdtempSync(join(tmpdir(), 'rpm-claude-'))
         const pluginDir = o.pluginDir ?? join(WORKER_DIR, '..', 'ui-framework', 'plugin')
-        const session = await toolServer.register([...chatTools(state), ...libraryTools({ ctx, atelier: cwd })], ctx.signal)
+        const session = await toolServer.register([...chatTools(state), ...libraryTools({ ctx, atelier: cwd, project: () => ({ open: state.branchOpen, dir: paths && state.branchOpen ? paths.worktree : null }) })], ctx.signal)
         let result: ClaudeResult
         let previews: PreviewResult[] = []
         let fixed = false

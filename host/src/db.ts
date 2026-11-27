@@ -278,6 +278,17 @@ export const MIGRATIONS = [
      definition TEXT NOT NULL DEFAULT '',
      PRIMARY KEY (user_id, name)
    );`,
+  // 17 : publication des images sur Roblox (operation en cours, erreur, proprietaire, qui l'a declenchee) et reglage de publication automatique.
+  `ALTER TABLE library_images ADD COLUMN roblox_op TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_error TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_owner TEXT;
+   ALTER TABLE library_images ADD COLUMN roblox_account_id INTEGER;
+   ALTER TABLE library_images ADD COLUMN published_by TEXT;
+   ALTER TABLE library_images ADD COLUMN published_at INTEGER;
+   CREATE TABLE library_settings (
+     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+     auto_publish INTEGER NOT NULL DEFAULT 1
+   );`,
 ]
 
 export function openDb(file?: string): Db {
