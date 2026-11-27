@@ -93,6 +93,25 @@
       if (!b) return
       navigator.clipboard?.writeText(b.dataset.copy).then(() => { b.textContent = 'Copie' ; setTimeout(() => { b.textContent = 'Copier' }, 1500) }).catch(() => {})
     })
+    // modification et suppression depuis la fenetre : envoi sans recharger, puis la fenetre relit l'etat (ou se ferme apres une suppression)
+    dialog.addEventListener('submit', async (e) => {
+      const f = e.target
+      if (!(f instanceof HTMLFormElement) || !(f.classList.contains('modal-edit') || f.classList.contains('modal-delete'))) return
+      e.preventDefault()
+      const id = /\/library\/([0-9a-f]{32})\//.exec(f.getAttribute('action') || '')?.[1]
+      const del = f.classList.contains('modal-delete')
+      if (del && !confirm('Supprimer cette image de la bibliotheque ? Cette action est definitive.')) return
+      const btn = f.querySelector('button[type=submit]')
+      btn.disabled = true
+      try {
+        const r = await fetch(f.getAttribute('action'), { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: new URLSearchParams(new FormData(f)) })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) { btn.disabled = false; let p = f.querySelector('.alert'); if (!p) { p = document.createElement('p'); p.className = 'alert error'; p.setAttribute('role', 'alert'); f.prepend(p) } p.textContent = j.error || 'Operation impossible.'; return }
+        published = true
+        if (del) { dialog.close(); return }
+        if (id) await showInfo(id)
+      } catch { btn.disabled = false }
+    })
     dialog.addEventListener('submit', async (e) => {
       const form = e.target
       if (!(form instanceof HTMLFormElement) || !form.classList.contains('modal-publish')) return

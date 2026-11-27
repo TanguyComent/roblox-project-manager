@@ -490,3 +490,21 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .info .rbx { margin-top: 14px; padding: 12px; background: var(--surface3); border-radius: 10px; }
 .info .rbx-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 @media (max-width: 720px) { .info { grid-template-columns: 1fr; } }
+
+/* Vue de base : l'image seule (tout le reste est dans la fenetre) */
+.lib-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.lib-card { position: relative; border-radius: 10px; }
+.lib-card .lib-thumb { aspect-ratio: 1 / 1; border: 0; border-radius: 10px; transition: transform .12s ease, box-shadow .12s ease; }
+.lib-card .lib-thumb:hover { transform: translateY(-2px); box-shadow: 0 8px 22px -12px rgba(0, 0, 0, .9); }
+.lib-card .lib-thumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lib-card[data-status="sorting"] .lib-thumb { opacity: .55; }
+.modal-manage { margin-top: 14px; }
+.modal-manage summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.modal-edit { display: grid; gap: 8px; margin-top: 10px; }
+.modal-delete { margin-top: 14px; }
+/* ouverture de la fenetre : leger zoom */
+@keyframes lib-pop { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+@keyframes lib-fade { from { opacity: 0; } to { opacity: 1; } }
+#lib-modal[open] { animation: lib-pop .2s cubic-bezier(.2, .8, .2, 1); }
+#lib-modal[open]::backdrop { animation: lib-fade .2s ease-out; }
+@media (prefers-reduced-motion: reduce) { #lib-modal[open], #lib-modal[open]::backdrop { animation: none; } .lib-card .lib-thumb { transition: none; } }

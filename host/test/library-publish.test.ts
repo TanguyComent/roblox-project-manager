@@ -187,8 +187,11 @@ test('routes de la page : publication manuelle, reglage, affichage', async () =>
   const roblox = fakeAssets()
   // la page utilise le client Roblox de l'application : on verifie surtout la mise en forme et les refus (sans Roblox joignable, l'envoi echoue proprement)
   const page = (await t.c.call('GET', '/library')).text
-  assert.match(page, new RegExp(`action="/library/${id}/publish"`))
-  assert.match(page, /Publier sur Roblox/)
+  assert.match(page, new RegExp(`id="i${id}"`), 'la vignette est dans la grille')
+  assert.doesNotMatch(page, /Publier sur Roblox|\/publish"/, 'la vue de base ne montre que l image : tout se fait dans la fenetre')
+  const info = (JSON.parse((await t.c.call('GET', `/library/${id}/info`, undefined, { accept: 'application/json' })).text) as { html: string }).html
+  assert.match(info, new RegExp(`action="/library/${id}/publish"`))
+  assert.match(info, /Uploader sur Roblox/)
   assert.match(page, /Publier automatiquement sur Roblox/)
   assert.match(page, /checked/, 'publication automatique activee par defaut')
   assert.equal(autoPublishOf(t.c.db, t.userId), true)
@@ -403,4 +406,34 @@ test('envoi depuis la fenetre : reponse JSON (publiee, erreur) sans rechargement
   const id2 = await t.add('autre.png')
   const form = await t.c.call('POST', `/library/${id2}/publish`, { csrf: t.csrf, target: `project:${t.project.id}`, view: 'sorted' })
   assert.equal(form.res.status, 303)
+})
+
+test('vue de base : l image seule ; modification et suppression dans la fenetre (JSON)', async () => {
+  const t = await setup()
+  const id = await t.add('epee.png')
+  t.c.db.prepare("UPDATE library_images SET style = 'cartoon-a', subject = 'epee', description = 'Une epee', tags = 'epee', colors = 'rouge' WHERE id = ?").run(id)
+  const page = (await t.c.call('GET', '/library')).text
+  const card = new RegExp(`<article class="lib-card" id="i${id}"[^>]*>(.*?)</article>`, 's').exec(page)![1]
+  assert.match(card, /<img src="\/library\/[0-9a-f]{32}\/file"/)
+  assert.equal(card.replace(/<[^>]*>/g, '').trim(), '', 'aucun texte visible dans la vignette')
+  assert.doesNotMatch(card, /<form|Modifier|Supprimer|cartoon-a/, 'ni formulaire ni information')
+  assert.match(card, /title="epee"/, 'le nom en infobulle')
+  const info = (JSON.parse((await t.c.call('GET', `/library/${id}/info`, undefined, { accept: 'application/json' })).text) as { html: string }).html
+  assert.match(info, /Modifier les informations/)
+  assert.match(info, new RegExp(`action="/library/${id}/edit" class="modal-edit"`))
+  assert.match(info, new RegExp(`action="/library/${id}/delete" class="modal-delete"`))
+  const edit = await t.c.call('POST', `/library/${id}/edit`, { csrf: t.csrf, title: 'Epee de feu', description: 'Nouvelle description' }, { accept: 'application/json' })
+  assert.deepEqual([edit.res.status, JSON.parse(edit.text)], [200, { ok: true }])
+  assert.equal(getImage(t.c.db, t.userId, id)!.description, 'Nouvelle description')
+  assert.equal((await t.c.call('POST', `/library/${id}/edit`, { csrf: 'faux' }, { accept: 'application/json' })).res.status, 403)
+  // en cours de tri : ni modification ni suppression, et la fenetre l'explique
+  t.c.db.prepare("UPDATE library_images SET status = 'sorting' WHERE id = ?").run(id)
+  const locked = (JSON.parse((await t.c.call('GET', `/library/${id}/info`, undefined, { accept: 'application/json' })).text) as { html: string }).html
+  assert.match(locked, /en cours de tri/)
+  assert.doesNotMatch(locked, /modal-edit|modal-delete/)
+  assert.equal((await t.c.call('POST', `/library/${id}/delete`, { csrf: t.csrf }, { accept: 'application/json' })).res.status, 409)
+  t.c.db.prepare("UPDATE library_images SET status = 'sorted' WHERE id = ?").run(id)
+  const del = await t.c.call('POST', `/library/${id}/delete`, { csrf: t.csrf }, { accept: 'application/json' })
+  assert.deepEqual([del.res.status, JSON.parse(del.text)], [200, { ok: true }])
+  assert.equal(getImage(t.c.db, t.userId, id), undefined)
 })

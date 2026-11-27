@@ -167,7 +167,7 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     const p = await post(c)
     if ('res' in p) return p.res
     try { editImage(db, p.a.user.id, c.req.param('id'), { title: p.f.s('title'), scope: p.f.s('scope'), style: p.f.s('style'), traits: p.f.s('traits'), subject: p.f.s('subject'), colors: p.f.s('colors'), description: p.f.s('description'), tags: p.f.s('tags'), origin: p.f.s('origin') }) } catch (e) { return fail(c, p.a, e) }
-    return back(c, p.f.s('view'))
+    return wantsJson(c) ? c.json({ ok: true }) : back(c, p.f.s('view'))
   })
 
   // Renomme (ou fusionne) une valeur de scope, de style ou de sujet sur toutes les images.
@@ -218,6 +218,6 @@ export function libraryRoutes(app: Hono<Env>, ctx: Ctx) {
     const p = await post(c)
     if ('res' in p) return p.res
     try { if (!deleteImage(db, p.a.user.id, c.req.param('id'))) return fail(c, p.a, new LibraryError('Image introuvable.', 404)) } catch (e) { return fail(c, p.a, e) }
-    return back(c, p.f.s('view'))
+    return wantsJson(c) ? c.json({ ok: true }) : back(c, p.f.s('view'))
   })
 }

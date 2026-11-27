@@ -14,40 +14,10 @@ export const groupOf = (v: unknown): Group => (v === 'style' || v === 'subject' 
 const fmtSize = (n: number) => (n < 1024 ? `${n} o` : n < 1048576 ? `${Math.round(n / 1024)} Ko` : `${(n / 1048576).toFixed(1)} Mo`)
 const chips = (csv: string, cls = 'tag') => (csv ? csv.split(',').map((t) => `<span class="${cls}">${esc(t)}</span>`).join('') : '')
 
-const viewField = (view: string) => `<input type="hidden" name="view" value="${view}">`
-
-const robloxLine = (img: LibraryImage, csrf: string, targets: TargetOption[], view = 'sorted') => {
-  if (img.status !== 'sorted') return ''
-  if (img.roblox_status === 'published') return `<div class="rbx ok"><strong>Roblox</strong> <code>rbxassetid://${esc(img.roblox_asset_id ?? '')}</code>${img.published_by ? ` <span class="muted small">(${esc(img.published_by)})</span>` : ''}</div>`
-  if (img.roblox_status === 'publishing') return '<div class="rbx wait">Publication en cours (moderation Roblox)…</div>'
-  const form = !FORMATS[img.mime] ? '<span class="muted small">Format non publiable sur Roblox (PNG ou JPEG seulement).</span>'
-    : !targets.length ? '<span class="muted small">Lie un compte Roblox a un projet pour publier.</span>'
-    : `<form method="post" action="/library/${img.id}/publish" class="rbx-form">${csrfField(csrf)}${viewField(view)}<select name="target" aria-label="Publier sur">${targets.map((t) => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}</select><button type="submit">Publier sur Roblox</button></form>`
-  return `<div class="rbx">${img.roblox_status === 'failed' && img.roblox_error ? `<p class="alert error small">${esc(img.roblox_error)}</p>` : ''}${form}</div>`
-}
-
-const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = [], view = 'sorted') => {
-  const status = img.status === 'sorting' ? '<span class="chip accent">Tri en cours…</span>' : img.status === 'pending' ? '<span class="chip">En attente</span>' : ''
-  const locked = img.status === 'sorting'
+/** Formulaire de modification (dans la fenetre d'une image). */
+function editFormHtml(img: LibraryImage, csrf: string): string {
   const sorted = img.status === 'sorted'
-  const ratio = ratioKind(img.width, img.height)
-  const facts = [
-    sorted && img.scope ? `<span class="chip">${esc(img.scope)}</span>` : '',
-    sorted && img.style ? `<span class="chip style">${esc(img.style)}</span>` : '',
-    sorted && img.subject ? `<span class="chip subject">${esc(img.subject)}</span>` : '',
-  ].join('')
-  return `<article class="lib-card" id="i${img.id}">
-  <a class="lib-thumb" href="/library/${img.id}/file" target="_blank" rel="noopener"><img src="/library/${img.id}/file" alt="${esc(img.description || img.file_name)}" loading="lazy" decoding="async"></a>
-  <div class="lib-meta">
-    <div class="lib-title"><strong>${esc(sorted ? img.title : img.file_name)}</strong>${status}</div>
-    ${facts ? `<div class="facts">${facts}</div>` : ''}
-    ${img.description ? `<p class="lib-desc">${esc(img.description)}</p>` : ''}
-    ${img.colors ? `<div class="tags colors">${chips(img.colors, 'tag color')}</div>` : ''}
-    ${img.traits ? `<div class="tags">${chips(img.traits)}</div>` : ''}
-    <div class="muted small">${img.width ? `${img.width}×${img.height}${ratio ? ` (${ratio})` : ''} · ` : ''}${fmtSize(img.size)} · ${esc(img.mime.replace('image/', '').toUpperCase())}${img.source === 'generated' ? ' · generee' : ''}${img.origin ? ` · ${esc(img.origin)}` : ''}${img.hint ? ` · ${esc(img.hint)}/` : ''}${img.roblox_status === 'published' ? ` · Roblox ${esc(img.roblox_asset_id ?? '')}` : ''}</div>
-    ${robloxLine(img, csrf, targets, view)}
-    ${locked ? '' : `<details class="lib-edit"><summary>Modifier</summary>
-      <form method="post" action="/library/${img.id}/edit">${csrfField(csrf)}${viewField(view)}
+  return `<form method="post" action="/library/${img.id}/edit" class="modal-edit">${csrfField(csrf)}
         <label>Nom <input type="text" name="title" maxlength="60" value="${esc(sorted ? img.title : '')}" placeholder="${esc(img.title)}"></label>
         <label>Scope <input type="text" name="scope" maxlength="32" value="${esc(img.scope)}" placeholder="icon, decoration, background..."></label>
         <label>Style <input type="text" name="style" maxlength="40" value="${esc(img.style)}" placeholder="cartoon-contour-epais"></label>
@@ -57,13 +27,12 @@ const card = (img: LibraryImage, csrf: string, targets: TargetOption[] = [], vie
         <label>Description <textarea name="description" rows="2" maxlength="160">${esc(img.description)}</textarea></label>
         <label>Mots-cles <input type="text" name="tags" maxlength="300" value="${esc(img.tags.replace(/,/g, ', '))}" placeholder="epee, sword, arme"></label>
         <label>Provenance (pack) <input type="text" name="origin" maxlength="60" value="${esc(img.origin)}" placeholder="pack Fantasy GUI"></label>
-        <button type="submit">Enregistrer</button>
-      </form>
-      <form method="post" action="/library/${img.id}/delete">${csrfField(csrf)}${viewField(view)}<button class="danger" type="submit">Supprimer</button></form>
-    </details>`}
-  </div>
-</article>`
+        <button type="submit" class="primary">Enregistrer</button>
+      </form>`
 }
+
+/** Vignette d'une image : l'image seule. Tout le reste (infos, modification, suppression, envoi sur Roblox) est dans la fenetre qui s'ouvre au clic. */
+const card = (img: LibraryImage) => `<article class="lib-card" id="i${img.id}" data-status="${img.status}"><a class="lib-thumb" href="/library/${img.id}/file" target="_blank" rel="noopener" title="${esc(img.status === 'sorted' ? img.title : img.file_name)}"><img src="/library/${img.id}/file" alt="${esc(img.description || img.file_name)}" loading="lazy" decoding="async"></a></article>`
 
 export const PAGE_SIZE = 48
 
@@ -114,7 +83,7 @@ export function libraryGridHtml(images: LibraryImage[], csrf: string, opts: Grid
   const slice = ordered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
   const parts: string[] = []
   if (view === 'pending') {
-    parts.push(`<div class="lib-grid">${slice.map((i) => card(i, csrf, targets, view)).join('')}</div>`)
+    parts.push(`<div class="lib-grid">${slice.map((i) => card(i)).join('')}</div>`)
   } else {
     const totals = new Map<string, number>()
     for (const i of ordered) totals.set(key(i), (totals.get(key(i)) ?? 0) + 1)
@@ -128,7 +97,7 @@ export function libraryGridHtml(images: LibraryImage[], csrf: string, opts: Grid
       <form method="post" action="/library/rename">${csrfField(csrf)}<input type="hidden" name="facet" value="${group}"><input type="hidden" name="from" value="${esc(n)}">
         <input type="text" name="to" maxlength="40" value="${esc(n)}" aria-label="Nouveau nom" required><button type="submit">Renommer</button></form>
       <p class="muted small">Un nom deja existant fusionne les deux groupes.</p></details>`
-      parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${totals.get(n) ?? list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i, csrf, targets, view)).join('')}</div></section>`)
+      parts.push(`<section><h2><span class="folder">${esc(n)}</span> <span class="count">${totals.get(n) ?? list.length}</span>${rename}</h2><div class="lib-grid">${list.map((i) => card(i)).join('')}</div></section>`)
     }
   }
   return `${parts.join('\n')}\n${pager({ view, group, q }, page, pages, ordered.length)}`
@@ -205,6 +174,7 @@ export function libraryInfoHtml(img: LibraryImage, csrf: string, targets: Target
   const row = (label: string, value: string) => (value ? `<dt>${label}</dt><dd>${value}</dd>` : '')
   const list = (csv: string, cls = 'tag') => (csv ? `<div class="tags">${chips(csv, cls)}</div>` : '')
   const sorted = img.status === 'sorted'
+  const locked = img.status === 'sorting'
   let roblox: string
   if (img.roblox_status === 'published' && img.roblox_asset_id) {
     const ref = `rbxassetid://${img.roblox_asset_id}`
@@ -233,6 +203,8 @@ export function libraryInfoHtml(img: LibraryImage, csrf: string, targets: Target
       ${row('Ajoutee le', day(img.created_at))}${row('Triee le', day(img.sorted_at))}
     </dl>
     ${roblox}
+    ${locked ? '<p class="muted small">Cette image est en cours de tri : elle ne peut pas etre modifiee pour l\'instant.</p>' : `<details class="modal-manage"><summary>Modifier les informations</summary>${editFormHtml(img, csrf)}</details>
+    <form method="post" action="/library/${img.id}/delete" class="modal-delete">${csrfField(csrf)}<button type="submit" class="danger">Supprimer cette image</button></form>`}
   </div>
 </div>`
 }
