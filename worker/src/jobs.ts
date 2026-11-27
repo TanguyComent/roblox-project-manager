@@ -6,6 +6,10 @@ export interface JobContext {
   /** Declenche quand le Host annule la tache ou que la connexion est perdue : l'executeur doit s'arreter vite. */
   signal: AbortSignal
   event(level: 'info' | 'warn' | 'error', text: string, kind?: 'info' | 'thinking' | 'tool' | 'text'): void
+  /** Depose un paquet d'apercu (dossier) sur le Host, rattache a cette tache ; sans dossier, ne depose que les metadonnees. Renvoie l'identifiant de l'apercu. */
+  /** Telecharge un fichier joint par l'utilisateur (cite par cette tache) depuis le Host. */
+  downloadAttachment?(id: string): Promise<Buffer>
+  uploadPreview?(dir: string | null, meta: import('./preview.ts').PreviewMeta): Promise<string>
 }
 export type JobHandler = (ctx: JobContext) => Promise<unknown>
 

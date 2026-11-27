@@ -12,6 +12,7 @@ type Auth = NonNullable<Context<Env>['var']['auth']>
 const GITHUB_NOTICES: Record<string, string> = {
   connected: 'GitHub connecte.', saved: 'Reglages enregistres.', disconnected: 'GitHub deconnecte.',
   template: 'Template par defaut enregistre.', 'template-cleared': 'Template par defaut retire.',
+  'ui-template': 'Depot de maquette UI enregistre.', 'ui-template-cleared': 'Depot de maquette UI retire.',
 }
 const ROBLOX_NOTICES: Record<string, string> = {
   connected: 'Compte Roblox connecte.', updated: 'Cle mise a jour.', verified: 'Cle verifiee : elle est valide.', disconnected: 'Compte Roblox deconnecte.',
@@ -54,7 +55,7 @@ export async function renderAccount(
     email: a.user.email, csrf: a.session.csrf, recoveryLeft: remainingRecoveryCodes(db, a.user.id), notice: extra.notice,
     roblox: { accounts, error: extra.robloxError, notice: ROBLOX_NOTICES[extra.robloxKey ?? ''] },
     github: {
-      connection: c ? { login: c.login, template: c.template_repo ?? '', branch: c.template_branch ?? '', owner: c.default_owner ?? '' } : null,
+      connection: c ? { login: c.login, template: c.template_repo ?? '', branch: c.template_branch ?? '', uiTemplate: c.ui_template_repo ?? '', uiBranch: c.ui_template_branch ?? '', owner: c.default_owner ?? '' } : null,
       error: extra.githubError, notice: extra.githubNotice ?? GITHUB_NOTICES[extra.githubKey ?? ''],
     },
   })

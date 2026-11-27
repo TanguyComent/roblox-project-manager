@@ -1,0 +1,5 @@
+{
+  "name": "rpm-ui",
+  "version": "0.1.0",
+  "description": "Apprend a l'IA a construire une interface Roblox (React / roblox-ts) avec les composants du depot et a la montrer a l'utilisateur dans le chat sous forme d'apercu interactif."
+}

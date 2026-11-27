@@ -1,8 +1,10 @@
 // Interface de chat IA, dans l'esprit de Claude Code : liste des chats a gauche (pastilles : en cours, en attente, reponse non lue), conversation a droite
 // avec l'activite de l'IA (pensee, outils) et une zone de saisie avec choix du modele et de l'effort. Les fragments (liste, fil) sont aussi renvoyes par
 // l'endpoint « live » : la page se met a jour sans rechargement.
+import { isInline, type Attachment } from './attachments.ts'
 import { DEFAULT_TITLE, EFFORTS, MAX_PROMPT, MAX_TITLE, MODELS, type Chat, type ChatMessage, type ChatState } from './chats.ts'
 import { renderMarkdown } from './markdown.ts'
+import type { PreviewRow } from './previews.ts'
 import type { Project } from './projects.ts'
 import { alert, appPage, csrfField, esc, type Viewer } from './views.ts'
 import type { JobEvent } from './workers.ts'
@@ -22,6 +24,7 @@ const I = {
   info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v5h1"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
   worker: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg>',
+  clip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20.5 11.5-8.6 8.6a5 5 0 0 1-7.1-7.1l9-9a3.3 3.3 0 0 1 4.7 4.7l-9 9a1.7 1.7 0 0 1-2.4-2.4l8.3-8.3"/></svg>',
   branch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/></svg>',
 }
 
@@ -69,7 +72,30 @@ function activityHtml(m: ChatMessage, events: JobEvent[]) {
   return `<details class="activity" data-k="a${m.id}"${pending ? ' open' : ''}><summary>${label}</summary><ul class="steps-list">${list}</ul></details>`
 }
 
-function assistantHtml(m: ChatMessage, events: JobEvent[]) {
+const VP_CLASS: Record<string, string> = { 'UI Labs': 'vp-uilabs', Desktop: 'vp-desktop', Tablette: 'vp-tablet', Telephone: 'vp-phone' }
+
+/** Carte d'un bloc ```rpm-ui : l'apercu interactif (cadre ISOLE, voir preview-routes.ts), ou la raison pour laquelle il n'existe pas. */
+export function uiBlockHtml(n: number, rows: PreviewRow[] | undefined): string {
+  const row = rows?.find((r) => r.n === n)
+  if (!row) return `<div class="ui-preview unavailable"><p class="muted small">Apercu indisponible pour ce bloc.</p></div>`
+  const title = esc(row.title || row.file)
+  if (!row.ok) {
+    return `<div class="ui-preview failed"><div class="ui-preview-head"><strong>${title}</strong>${row.root === 'sandbox' ? '<span class="chip accent" title="Concept dans l\'atelier du chat">Atelier</span>' : ''}<span class="chip">${esc(row.file)}</span></div>${alert(`Apercu impossible : ${row.error ?? 'erreur inconnue'}`)}</div>`
+  }
+  const src = esc(`/preview/${row.id}/index.html?embed=1&vp=${encodeURIComponent(row.viewport)}`)
+  const notes = [
+    row.errors.length ? alert(`L'apercu s'affiche avec des erreurs : ${row.errors.slice(0, 2).join(' | ')}`) : '',
+    row.missing.length ? `<details class="small muted"><summary>${row.missing.length} module${row.missing.length > 1 ? 's' : ''} du jeu remplace${row.missing.length > 1 ? 's' : ''} par l'emulateur</summary><p>${row.missing.map((x) => `<code>${esc(x)}</code>`).join(' ')}</p></details>` : '',
+  ].join('')
+  return `<div class="ui-preview" data-pid="${row.id}">
+    <div class="ui-preview-head"><strong>${title}</strong>${row.root === 'sandbox' ? '<span class="chip accent" title="Concept dans l\'atelier du chat : de fausses donnees, rien d\'integre au projet">Atelier</span>' : ''}<span class="chip" title="Format d'ecran">${esc(row.viewport)}</span><span class="chip" title="Fichier de la story">${esc(row.file)}</span>
+      <a class="small" href="${src}" target="_blank" rel="noopener noreferrer">Ouvrir ↗</a></div>
+    <iframe class="${VP_CLASS[row.viewport] ?? 'vp-uilabs'}" src="${src}" sandbox="allow-scripts" loading="lazy" referrerpolicy="no-referrer" title="${title}"></iframe>
+    ${notes}
+  </div>`
+}
+
+function assistantHtml(m: ChatMessage, events: JobEvent[], previews: PreviewRow[] | undefined) {
   const activity = activityHtml(m, events)
   let body = ''
   if (m.status === 'pending') {
@@ -82,7 +108,7 @@ function assistantHtml(m: ChatMessage, events: JobEvent[]) {
       d.commits?.length ? (d.pushed ? 'pousse sur GitHub' : '<span class="warn-text">non pousse</span>') : '',
       duration(d.durationMs), money(d.costUsd),
     ].filter(Boolean) : []
-    body = `<div class="answer md">${renderMarkdown(m.content)}</div>
+    body = `<div class="answer md">${renderMarkdown(m.content, { uiBlock: (n) => uiBlockHtml(n, previews) })}</div>
     ${d ? `<div class="reply-meta">${meta.map((x) => `<span>${x}</span>`).join('<span aria-hidden="true">·</span>')}<span class="stamp">${esc(ago(m.created_at))}</span></div>
     ${d.pushError ? alert(`Push impossible : ${d.pushError}`) : ''}
     ${d.commits?.length ? `<ul class="commits">${d.commits.map((c) => `<li><code>${esc(c)}</code></li>`).join('')}</ul>` : ''}
@@ -93,25 +119,43 @@ function assistantHtml(m: ChatMessage, events: JobEvent[]) {
   return `<div class="msg assistant" id="m${m.id}"><div class="avatar" aria-hidden="true">C</div><div class="content-col">${activity}${body}</div></div>`
 }
 
+const fmtSize = (n: number) => (n < 1024 ? `${n} o` : n < 1048576 ? `${Math.round(n / 1024)} Ko` : `${(n / 1048576).toFixed(1)} Mo`)
+
+/** Fichiers joints d'un message : vignettes cliquables pour les images verifiees, pastilles de telechargement pour le reste. */
+function filesHtml(files: Attachment[] | undefined, chatUrl: string) {
+  if (!files?.length) return ''
+  return `<div class="afiles">${files.map((a) => {
+    const url = `${chatUrl}/attachments/${a.id}`
+    return isInline(a)
+      ? `<a class="athumb" href="${url}" target="_blank" rel="noopener" title="${esc(a.name)}"><img src="${url}" alt="${esc(a.name)}" loading="lazy"></a>`
+      : `<a class="achip" href="${url}" download title="Telecharger"><span class="ak">${esc(a.kind === 'pdf' ? 'PDF' : a.kind === 'text' ? 'TXT' : (a.name.split('.').pop() ?? 'FICHIER').slice(0, 5).toUpperCase())}</span><span class="an">${esc(a.name)}</span><span class="as">${fmtSize(a.size)}</span></a>`
+  }).join('')}</div>`
+}
+
+/** Fichiers televerses mais pas encore envoyes (affiches dans le composeur ; retrait par la croix). */
+function stagedHtml(files: Attachment[], chatUrl: string) {
+  return files.map((a) => `<span class="achip staged" data-id="${a.id}">${isInline(a) ? `<img src="${chatUrl}/attachments/${a.id}" alt="">` : `<span class="ak">${esc(a.kind === 'pdf' ? 'PDF' : a.kind === 'text' ? 'TXT' : 'FICHIER')}</span>`}<span class="an">${esc(a.name)}</span><span class="as">${fmtSize(a.size)}</span><button type="button" class="x" data-remove aria-label="Retirer ${esc(a.name)}">×</button></span>`).join('')
+}
+
 /** Fil de la conversation (renvoye tel quel par l'endpoint live). */
-export function threadHtml(o: { messages: ChatMessage[]; events: Map<number, JobEvent[]>; hasRepo: boolean; noWorker: boolean; workerName: string | null }) {
+export function threadHtml(o: { files: Map<number, Attachment[]>; chatUrl: string; messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>; noWorker: boolean; workerName: string | null }) {
   const parts: string[] = []
-  if (!o.hasRepo) parts.push(alert("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet pour pouvoir discuter avec l'IA."))
   if (o.noWorker) parts.push(alert(`Aucun Worker connecte${o.workerName ? ` (« ${o.workerName} »)` : ''} ne dispose de Git et de Claude Code : la demande attend. Lance un Worker, ou verifie ses outils sur la page Workers.`))
   if (!o.messages.length) {
-    parts.push(`<div class="hello"><h2>Que veux-tu faire ?</h2><p>L'IA travaille sur la branche de ce chat, commite ses changements et les pousse sur GitHub.</p></div>`)
+    parts.push(`<div class="hello"><h2>Que veux-tu faire ?</h2>
+      <p>Discute, demande une <strong>idee d'interface</strong> (l'IA te propose un visuel dans son atelier, tu valides avant qu'elle l'integre) ou une <strong>modification du projet</strong> (elle ouvre sa branche et te montre le resultat).</p></div>`)
   }
   for (const m of o.messages) {
     parts.push(m.role === 'user'
-      ? `<div class="msg user" id="m${m.id}"><div class="bubble">${esc(m.content)}</div></div>`
-      : assistantHtml(m, m.job_id ? (o.events.get(m.job_id) ?? []) : []))
+      ? `<div class="msg user" id="m${m.id}"><div class="bubble">${filesHtml(o.files.get(m.id), o.chatUrl)}${esc(m.content)}</div></div>`
+      : assistantHtml(m, m.job_id ? (o.events.get(m.job_id) ?? []) : [], m.job_id ? o.previews.get(m.job_id) : undefined))
   }
   return `<div class="thread">${parts.join('\n')}</div>`
 }
 
 export interface ChatPageData {
-  project: Project; chats: Chat[]; chat: Chat | null; messages: ChatMessage[]; events: Map<number, JobEvent[]>
-  hasRepo: boolean; noWorker: boolean; pending: boolean; error?: string
+  project: Project; chats: Chat[]; chat: Chat | null; files: Map<number, Attachment[]>; staged: Attachment[]; messages: ChatMessage[]; events: Map<number, JobEvent[]>; previews: Map<number, PreviewRow[]>
+  hasProjectRepo: boolean; noWorker: boolean; pending: boolean; error?: string
 }
 
 export function chatPage(o: Viewer & ChatPageData) {
@@ -135,7 +179,9 @@ export function chatPage(o: Viewer & ChatPageData) {
       <header class="chat-head">
         <div class="ttl">
           <h1>${esc(c.title)}</h1>
-          <div class="meta"><span class="chip" title="Branche git de ce chat">${I.branch}${esc(c.branch)}</span>${c.worker_name ? `<span class="chip" title="Worker qui detient ce chat">${I.worker}${esc(c.worker_name)}</span>` : ''}</div>
+          <div class="meta">${c.branch_open
+            ? `<span class="chip" title="Branche de travail du projet, ouverte par l'IA">${I.branch}${esc(c.branch)}</span>`
+            : '<span class="chip accent" title="Dossier libre de ce chat : l\'IA y discute et y imagine des interfaces. Aucune branche, rien n\'est pousse sur GitHub tant que le projet n\'est pas modifie.">Atelier</span>'}${c.worker_name ? `<span class="chip" title="Worker qui detient ce chat">${I.worker}${esc(c.worker_name)}</span>` : ''}</div>
         </div>
         <div class="tools">
           <button class="ghost toggle-list" type="button" data-toggle-list>Chats</button>
@@ -146,25 +192,29 @@ export function chatPage(o: Viewer & ChatPageData) {
                 <button type="submit">Enregistrer</button>
               </form>
               <hr>
-              <p class="muted small">Supprime le chat de ce site. La branche <code>${esc(c.branch)}</code> reste sur GitHub.</p>
+              <p class="muted small">Supprime le chat de ce site.${c.branch_open ? ` La branche <code>${esc(c.branch)}</code> reste sur GitHub.` : " Son atelier est supprime du Worker au prochain nettoyage."}</p>
               <form method="post" action="${base}/delete">${csrfField(o.csrf)}<button class="danger" type="submit">Supprimer ce chat</button></form>
             </div>
           </details>
         </div>
       </header>
-      <div class="messages" id="messages">${threadHtml({ messages: o.messages, events: o.events, hasRepo: o.hasRepo, noWorker: o.noWorker, workerName: c.worker_name })}</div>
+      <div class="messages" id="messages">${threadHtml({ files: o.files, chatUrl: base, messages: o.messages, events: o.events, previews: o.previews, noWorker: o.noWorker, workerName: c.worker_name })}</div>
       <div class="composer-wrap">
         <div class="composer-error" id="composer-error">${alert(o.error)}</div>
-        <form class="composer" id="composer" method="post" action="${base}/messages" autocomplete="off">
+        <form class="composer" id="composer" method="post" action="${base}/messages" autocomplete="off" data-attach="${base}/attachments" data-csrf="${esc(o.csrf)}">
           ${csrfField(o.csrf)}
+          <input type="hidden" name="attachments" id="attachments" value="${o.staged.map((a) => a.id).join(',')}">
+          <div class="attach-staged" id="attach-staged">${stagedHtml(o.staged, base)}</div>
           <label class="sr" for="prompt">Message</label>
-          <textarea id="prompt" name="prompt" rows="1" maxlength="${MAX_PROMPT}" required placeholder="Decris ce que l'IA doit faire…"${o.pending || !o.hasRepo ? ' disabled' : ''}></textarea>
+          <textarea id="prompt" name="prompt" rows="1" maxlength="${MAX_PROMPT}" placeholder="Pose une question, decris une interface a imaginer, ou demande une modification du projet…"${o.pending ? ' disabled' : ''}></textarea>
           <div class="composer-bar">
+            <input type="file" id="file-input" multiple hidden>
+            <button class="attach ghost" type="button" id="attach-btn" aria-label="Joindre des fichiers" title="Joindre des fichiers (ou glisser-deposer, ou coller une image)">${I.clip}</button>
             ${select('model', 'Modele', MODELS, c.model)}
             ${select('effort', 'Effort de reflexion', EFFORTS, c.effort)}
             <span class="spacer"></span>
             <span class="hintline">Entree pour envoyer · Maj+Entree : nouvelle ligne</span>
-            <button class="send primary" type="submit" aria-label="Envoyer"${o.pending || !o.hasRepo ? ' disabled' : ''}>${I.send}</button>
+            <button class="send primary" type="submit" aria-label="Envoyer"${o.pending ? ' disabled' : ''}>${I.send}</button>
             <button class="stop danger" type="submit" formaction="${base}/cancel" formnovalidate>Arreter</button>
           </div>
         </form>

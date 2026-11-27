@@ -176,3 +176,64 @@ test('sans session complete, les routes GitHub renvoient vers la connexion', asy
     assert.equal(r.res.status, 302, path)
   }
 })
+
+// --- depot de maquette UI (second reglage, meme parcours que le template des projets) -----------------------------------------------------
+
+test('depot de maquette UI : liste des depots, branches, enregistrement, preselection', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  assert.match((await c.call('GET', '/account')).text, /Choisir un depot de maquette/)
+
+  const step1 = await c.call('GET', '/account/github/ui-template')
+  assert.equal(step1.res.status, 200)
+  assert.match(step1.text, /<h1>Depot de maquette UI<\/h1>/)
+  assert.match(step1.text, /action="\/account\/github\/ui-template"/, 'le formulaire envoie vers ce reglage, pas vers celui des projets')
+  assert.match(step1.text, /acme\/roblox-template/)
+  const step2 = await c.call('GET', '/account/github/ui-template?repo=acme/roblox-template')
+  assert.match(step2.text, /<option value="v2">v2<\/option>/)
+  assert.match(step2.text, /jamais modifie ni pousse|Chaque maquette part de cette branche/)
+
+  const save = await c.call('POST', '/account/github/ui-template', { csrf, repo: 'acme/roblox-template', branch: 'v2' })
+  assert.equal(save.res.status, 303)
+  assert.equal(save.res.headers.get('location'), '/account?g=ui-template')
+  const account = (await c.call('GET', '/account?g=ui-template')).text
+  assert.match(account, /Depot de maquette UI enregistre/)
+  assert.match(account, /<strong>acme\/roblox-template<\/strong>[^]*<code>v2<\/code>[^]*href="\/account\/github\/ui-template">Changer/)
+  const picker = (await c.call('GET', '/account/github/ui-template')).text
+  assert.match(picker, /<option value="acme\/roblox-template" selected>/)
+  assert.match(picker, /<option value="v2" selected>v2<\/option>/)
+
+  const conn = getConnection(c.db, (c.db.prepare('SELECT id FROM users').get() as { id: number }).id)!
+  assert.deepEqual([conn.ui_template_repo, conn.ui_template_branch], ['acme/roblox-template', 'v2'])
+  assert.equal(conn.template_repo, null, 'le template des projets n\'est pas touche')
+})
+
+test('les deux templates sont independants', async () => {
+  const { c, csrf } = await loggedIn()
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  await c.call('POST', '/account/github/template', { csrf, repo: 'acme/roblox-template', branch: 'main' })
+  await c.call('POST', '/account/github/ui-template', { csrf, repo: 'acme/old-template', branch: 'master' })
+  const conn = getConnection(c.db, (c.db.prepare('SELECT id FROM users').get() as { id: number }).id)!
+  assert.deepEqual([conn.template_repo, conn.template_branch, conn.ui_template_repo, conn.ui_template_branch], ['acme/roblox-template', 'main', 'acme/old-template', 'master'])
+  // retirer l'un laisse l'autre
+  assert.equal((await c.call('POST', '/account/github/ui-template/clear', { csrf })).res.headers.get('location'), '/account?g=ui-template-cleared')
+  const after = getConnection(c.db, conn.user_id)!
+  assert.deepEqual([after.template_repo, after.ui_template_repo], ['acme/roblox-template', null])
+  assert.match((await c.call('GET', '/account?g=ui-template-cleared')).text, /Depot de maquette UI retire/)
+  // le formulaire de nouveau projet ne prend QUE le template des projets
+  assert.match((await c.call('GET', '/projects/new')).text, /name="template" value="acme\/roblox-template"/)
+})
+
+test('depot de maquette UI : branche inconnue, depot invalide, jeton CSRF, GitHub non connecte', async () => {
+  const { c, csrf } = await loggedIn()
+  assert.equal((await c.call('GET', '/account/github/ui-template')).res.status, 303, 'GitHub doit etre connecte')
+  await c.call('POST', '/account/github', { csrf, token: 'tok' })
+  const noBranch = await c.call('POST', '/account/github/ui-template', { csrf, repo: 'acme/roblox-template', branch: 'inexistante' })
+  assert.equal(noBranch.res.status, 400)
+  assert.match(noBranch.text, /n(?:'|&#39;)existe pas/)
+  assert.equal((await c.call('POST', '/account/github/ui-template', { csrf, repo: '../../etc', branch: 'main' })).res.status, 400)
+  assert.equal((await c.call('POST', '/account/github/ui-template', { csrf, repo: 'acme/introuvable', branch: 'main' })).res.status, 502)
+  assert.equal((await c.call('POST', '/account/github/ui-template', { csrf: 'faux', repo: 'acme/roblox-template', branch: 'main' })).res.status, 403)
+  assert.equal((await c.call('POST', '/account/github/ui-template/clear', { csrf: 'faux' })).res.status, 403)
+  assert.equal((c.db.prepare('SELECT ui_template_repo FROM github_connections').get() as { ui_template_repo: string | null }).ui_template_repo, null)
+})

@@ -4,7 +4,7 @@ import { config, ensureDataDir } from './config.ts'
 
 export type Db = DatabaseSync
 
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `CREATE TABLE users (
      id INTEGER PRIMARY KEY,
      email TEXT NOT NULL UNIQUE,
@@ -195,6 +195,52 @@ const MIGRATIONS = [
    ALTER TABLE chats ADD COLUMN model TEXT;
    ALTER TABLE chats ADD COLUMN effort TEXT;
    ALTER TABLE chats ADD COLUMN seen_message_id INTEGER NOT NULL DEFAULT 0;`,
+  // 11 : apercus d'interface (paquets de l'emulateur d'UI deposes par les Workers) et chats « maquette »
+  `ALTER TABLE chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'project' CHECK (mode IN ('project', 'concept'));
+   CREATE TABLE previews (
+     id TEXT PRIMARY KEY,              -- 128 bits aleatoires : l'adresse de l'apercu en est la seule cle d'acces (voir preview-routes.ts)
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+     n INTEGER NOT NULL,               -- rang du bloc rpm-ui dans la reponse
+     title TEXT NOT NULL,
+     file TEXT NOT NULL,
+     viewport TEXT NOT NULL,
+     ok INTEGER NOT NULL,
+     error TEXT,
+     checked INTEGER NOT NULL DEFAULT 0,
+     nodes INTEGER NOT NULL DEFAULT 0,
+     errors_json TEXT NOT NULL DEFAULT '[]',
+     missing_json TEXT NOT NULL DEFAULT '[]',
+     bytes INTEGER NOT NULL DEFAULT 0,
+     created_at INTEGER NOT NULL,
+     UNIQUE (job_id, n)
+   );
+   CREATE INDEX previews_user ON previews(user_id);`,
+  // 12 : depot de maquette UI choisi parmi les depots du compte GitHub connecte (remplace le depot fixe)
+  `ALTER TABLE github_connections ADD COLUMN ui_template_repo TEXT;
+   ALTER TABLE github_connections ADD COLUMN ui_template_branch TEXT;`,
+  // 13 : un chat ne cree plus de branche a sa creation. Il travaille dans un « atelier » (dossier libre sur le Worker) et la branche du projet n'est ouverte
+  //      que quand l'IA doit modifier le projet (branch_open). Les chats deja utilises sur leur branche l'ont ouverte ; leur conversation Claude est
+  //      repartie de zero (son dossier de travail change : l'atelier). Les apercus savent d'ou vient leur story (project / sandbox = atelier).
+  `ALTER TABLE chats ADD COLUMN branch_open INTEGER NOT NULL DEFAULT 0;
+   UPDATE chats SET branch_open = 1 WHERE mode = 'project' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = chats.id);
+   UPDATE chats SET session_id = NULL;
+   ALTER TABLE previews ADD COLUMN root TEXT NOT NULL DEFAULT 'project';`,
+  // 14 : fichiers joints aux messages d'un chat (images, PDF, autres). message_id NULL = televerse mais message pas encore envoye.
+  `CREATE TABLE chat_attachments (
+     id TEXT PRIMARY KEY,              -- 128 bits aleatoires : nom du fichier sur le disque (jamais le nom d'origine)
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+     message_id INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL,
+     name TEXT NOT NULL,               -- nom d'origine, nettoye
+     kind TEXT NOT NULL CHECK (kind IN ('image', 'pdf', 'text', 'other')),
+     mime TEXT NOT NULL,               -- deduit des octets
+     size INTEGER NOT NULL,
+     sha256 TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX chat_attachments_chat ON chat_attachments(chat_id, id);
+   CREATE INDEX chat_attachments_user ON chat_attachments(user_id);`,
 ]
 
 export function openDb(file?: string): Db {

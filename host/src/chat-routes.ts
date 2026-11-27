@@ -4,10 +4,16 @@ import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
 import { chatListHtml, chatPage, threadHtml } from './chat-views.ts'
 import {
-  DEFAULT_TITLE, MAX_PROMPT, activityByJob, addExchange, createChat, deleteChat, effortOk, getChat, hasPendingReply, listChats, listMessages, markSeen, modelOk,
+  DEFAULT_TITLE, MAX_PROMPT, allJobIds, activityByJob, addExchange, createChat, deleteChat, effortOk, getChat, hasPendingReply, listChats, listMessages, markSeen, modelOk,
   pendingJobIds, renameChat, setChatPrefs, syncChat, titleFromFirstMessage, titleProblem, type Chat,
 } from './chats.ts'
+import {
+  AttachmentError, attachToMessage, attachmentsForMessages, chatAttachments, deleteChatAttachments, deleteStaged, getAttachment, isInline, listStaged, readBytes, saveStaged, stagedByIds,
+} from './attachments.ts'
+import { config } from './config.ts'
+import { uiTemplateOf } from './github-connection.ts'
 import type { Db } from './db.ts'
+import { deletePreviewsOfJobs, previewsForJobs } from './previews.ts'
 import { getProject, type Project } from './projects.ts'
 import { messagePage } from './views.ts'
 import type { WorkerHub } from './worker-hub.ts'
@@ -28,17 +34,19 @@ interface Ctx {
 export const CHAT_REQUIRES = ['git', 'claude']
 
 const intParam = (c: Context, name: string) => { const v = c.req.param(name); return v && /^\d{1,12}$/.test(v) ? Number(v) : null }
-const wantsJson = (c: Context) => (c.req.header('accept') ?? '').includes('application/json')
+const asciiName = (n: string) => n.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
+const wantsJson =(c: Context) => (c.req.header('accept') ?? '').includes('application/json')
 
 export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
   const { db, hub, html, form, csrfOk, requireFull } = ctx
 
   // Garde commune : session complete, jeton CSRF (POST), projet de l'utilisateur et, si l'adresse en contient un, chat de ce projet.
-  const guard = async (c: Context, opts: { post?: boolean; chat?: boolean } = {}) => {
+  const guard = async (c: Context, opts: { post?: boolean; chat?: boolean; raw?: boolean } = {}) => {
     const a = requireFull(c)
     if (a instanceof Response) return { res: a } as const
-    const f = opts.post ? await form(c) : { s: (_: string) => '' }
-    if (opts.post && !csrfOk(c, f.s('csrf'))) return { res: wantsJson(c) ? c.json({ error: 'Session expiree : recharge la page.' }, 403) : c.text('Jeton invalide', 403) } as const
+    // raw : corps binaire (televersement) : le jeton CSRF est dans l'en-tete X-CSRF, le corps n'est pas un formulaire
+    const f = opts.post && !opts.raw ? await form(c) : { s: (_: string) => '' }
+    if (opts.post && !csrfOk(c, opts.raw ? c.req.header('x-csrf') ?? '' : f.s('csrf'))) return { res: wantsJson(c) ? c.json({ error: 'Session expiree : recharge la page.' }, 403) : c.text('Jeton invalide', 403) } as const
     const pid = intParam(c, 'id')
     const project = pid === null ? undefined : getProject(db, a.user.id, pid)
     const notFound = (what: string) => ({ res: html(c, messagePage(`${what} introuvable`, "Cet element n'existe pas ou ne t'appartient pas.", 404).html, 404) }) as const
@@ -65,11 +73,15 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const chats = syncProject(a, project, activeId)
     const chat = activeId === null ? null : chats.find((x) => x.id === activeId) ?? null
     const messages = chat ? listMessages(db, chat.id) : []
-    const events = activityByJob(db, messages.flatMap((m) => (m.job_id ? [m.job_id] : [])))
+    const files = chat ? attachmentsForMessages(db, messages.map((m) => m.id)) : new Map()
+    const staged = chat ? listStaged(db, chat.id) : []
+    const jobIds = messages.flatMap((m) => (m.job_id ? [m.job_id] : []))
+    const events = activityByJob(db, jobIds)
+    const previews = previewsForJobs(db, jobIds)
     const pendingMsg = messages.find((m) => m.status === 'pending')
     const pending = !!pendingMsg
     const noWorker = !!pendingMsg && pendingMsg.job_status === 'queued' && !!chat && !hub.hasCapable(a.user.id, CHAT_REQUIRES, chat.worker_id)
-    return { chats, chat, messages, events, pending, noWorker, hasRepo: !!project.github_repo }
+    return { chats, chat, messages, files, staged, events, previews, pending, noWorker, hasProjectRepo: !!project.github_repo }
   }
 
   const renderPage = (c: Context, a: Auth, project: Project, activeId: number | null, error?: string, status: Status = 200) => {
@@ -110,7 +122,7 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     c.header('Cache-Control', 'no-store')
     return c.json({
       list: chatListHtml({ project: g.project, chats: s.chats, activeId: g.chat!.id, csrf: g.a.session.csrf }),
-      thread: threadHtml({ messages: s.messages, events: s.events, hasRepo: s.hasRepo, noWorker: s.noWorker, workerName: s.chat?.worker_name ?? null }),
+      thread: threadHtml({ files: s.files, chatUrl: `/projects/${g.project.id}/chats/${g.chat!.id}`, messages: s.messages, events: s.events, previews: s.previews, noWorker: s.noWorker, workerName: s.chat?.worker_name ?? null }),
       pending: s.pending,
       busy: s.chats.some((x) => x.state === 'running' || x.state === 'queued'),
       unread: s.chats.filter((x) => x.state === 'unread').length,
@@ -122,15 +134,20 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const g = await guard(c, { post: true, chat: true })
     if ('res' in g) return g.res
     const { a, project, chat, f } = g
-    const prompt = f.s('prompt').replace(/\r\n/g, '\n').trim()
+    let prompt = f.s('prompt').replace(/\r\n/g, '\n').trim()
     const model = f.s('model')
     const effort = f.s('effort')
     const back = `/projects/${project.id}/chats/${chat!.id}`
-    const fail = (error: string, status: Status = 400) => (wantsJson(c) ? c.json({ error }, status) : renderPage(c, a, project, chat!.id, error, status))
-    if (!prompt) return fail('Ecris un message.')
+    const fail = (error: string, status: Status | 413 = 400) => (wantsJson(c) ? c.json({ error }, status) : renderPage(c, a, project, chat!.id, error, status === 413 ? 400 : status))
+    let files: ReturnType<typeof stagedByIds> = []
+    try { files = stagedByIds(db, chat!.id, f.s('attachments').split(',').filter(Boolean)) } catch (e) {
+      if (e instanceof AttachmentError) return fail(e.message, e.status)
+      throw e
+    }
+    if (!prompt && !files.length) return fail('Ecris un message.')
+    if (!prompt) prompt = files.length > 1 ? 'Voici des fichiers.' : 'Voici un fichier.'
     if (prompt.length > MAX_PROMPT) return fail(`Message trop long (${MAX_PROMPT} caracteres maximum).`)
     if (!modelOk(model) || !effortOk(effort)) return fail('Modele ou effort inconnu.')
-    if (!project.github_repo) return fail("Ce projet n'a pas de depot GitHub : renseigne-le dans le projet.")
     syncChat(db, a.user.id, chat!.id)
     if (hasPendingReply(db, chat!.id)) return fail('Une reponse est deja en cours pour ce chat.', 409)
 
@@ -140,12 +157,61 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const current = getChat(db, project.id, fresh.id)!
     // Le Worker qui detient le dossier et la conversation Claude est reutilise ; s'il n'existe plus, un autre prend le relais (nouvelle conversation, meme branche).
     const sessionId = current.worker_id ? current.session_id : null
+    // Un chat ne demande rien d'avance : pas de branche, pas de depot. Le Worker lui donne un ATELIER (dossier libre, copie du depot de maquette du compte GitHub
+    // s'il y en a un, jamais pousse). Le projet (depot GitHub) est lu et sa branche ouverte A LA DEMANDE de l'IA, quand elle doit vraiment le modifier ;
+    // `open` dit si elle l'a deja fait. Un projet sans depot : l'atelier seul.
+    const template = uiTemplateOf(db, a.user.id, config.uiTemplateRepo)
     const jobId = hub.enqueue(a.user.id, 'ai.chat', {
-      project: project.slug, url: `https://github.com/${project.github_repo}.git`, branch: current.branch, prompt, sessionId, push: true,
-      model: model || null, effort: effort || null,
+      chatId: current.id, prompt, sessionId, model: model || null, effort: effort || null, push: true,
+      project: project.github_repo ? { slug: project.slug, url: `https://github.com/${project.github_repo}.git`, branch: current.branch, base: null, open: current.branch_open } : null,
+      attachments: chatAttachments(db, current.id).concat(files).map((x) => ({ id: x.id, name: x.name, kind: x.kind, mime: x.mime, size: x.size, sha256: x.sha256, current: files.includes(x) })),
+      atelier: template ? { url: `https://github.com/${template.repo}.git`, base: template.branch } : null,
     }, { workerId: current.worker_id, requires: CHAT_REQUIRES })
-    addExchange(db, current.id, prompt, jobId)
+    attachToMessage(db, addExchange(db, current.id, prompt, jobId), files.map((x) => x.id))
     return wantsJson(c) ? c.json({ ok: true }) : c.redirect(back, 303)
+  })
+
+  // --- fichiers joints : televersement (corps brut, nom dans X-File-Name), retrait d'un fichier en attente, service ---------------------------
+  const attBase = '/projects/:id{[0-9]+}/chats/:cid{[0-9]+}/attachments'
+  const attJson = (a: { id: string; name: string; kind: string; mime: string; size: number }, chatUrl: string) =>
+    ({ id: a.id, name: a.name, kind: a.kind, size: a.size, url: isInline(a as never) ? `${chatUrl}/attachments/${a.id}` : null })
+
+  app.post(attBase, async (c) => {
+    const g = await guard(c, { post: true, chat: true, raw: true })
+    if ('res' in g) return g.res
+    let name = ''
+    try { name = decodeURIComponent(c.req.header('x-file-name') ?? '') } catch { return c.json({ error: 'Nom de fichier invalide.' }, 400) }
+    const data = Buffer.from(await c.req.arrayBuffer())
+    try {
+      return c.json(attJson(saveStaged(db, g.a.user.id, g.chat!.id, name, data), `/projects/${g.project.id}/chats/${g.chat!.id}`))
+    } catch (e) {
+      if (e instanceof AttachmentError) return c.json({ error: e.message }, e.status)
+      throw e
+    }
+  })
+
+  app.post(`${attBase}/:aid{[0-9a-f]{32}}/delete`, async (c) => {
+    const g = await guard(c, { post: true, chat: true, raw: true })
+    if ('res' in g) return g.res
+    return deleteStaged(db, g.chat!.id, c.req.param('aid')) ? c.json({ ok: true }) : c.json({ error: 'Introuvable.' }, 404)
+  })
+
+  // Service : proprietaire seulement (404 pour les autres). Images verifiees (PNG / JPEG / WebP / GIF) en ligne ; tout le reste en telechargement.
+  app.get(`${attBase}/:aid{[0-9a-f]{32}}`, async (c) => {
+    const g = await guard(c, { chat: true })
+    if ('res' in g) return g.res
+    const row = getAttachment(db, g.chat!.id, c.req.param('aid'))
+    const data = row ? readBytes(row.id) : null
+    if (!row || !data) return c.text('Introuvable', 404)
+    const inline = isInline(row)
+    return c.body(new Uint8Array(data), 200, {
+      'Content-Type': inline ? row.mime : 'application/octet-stream',
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${asciiName(row.name)}"; filename*=UTF-8''${encodeURIComponent(row.name)}`,
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Cache-Control': 'private, max-age=3600',
+    })
   })
 
   app.post('/projects/:id{[0-9]+}/chats/:cid{[0-9]+}/cancel', async (c) => {
@@ -170,6 +236,8 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     const g = await guard(c, { post: true, chat: true })
     if ('res' in g) return g.res
     for (const jobId of pendingJobIds(db, g.chat!.id)) hub.cancel(g.a.user.id, jobId) // une reponse en cours est arretee
+    deletePreviewsOfJobs(db, allJobIds(db, g.chat!.id)) // paquets d'apercu : lignes et fichiers
+    deleteChatAttachments(db, g.chat!.id)
     deleteChat(db, g.project.id, g.chat!.id)
     return c.redirect(`/projects/${g.project.id}/chats`, 303)
   })

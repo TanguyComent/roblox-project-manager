@@ -11,6 +11,8 @@ export interface Chat {
   id: number; project_id: number; title: string; branch: string; session_id: string | null
   worker_id: number | null; worker_name: string | null; created_at: number; updated_at: number; message_count: number
   model: string | null; effort: string | null; seen_message_id: number
+  /** La branche de travail du projet a-t-elle ete ouverte ? Tant que non, le chat n'a que son atelier (aucune branche, aucun depot). */
+  branch_open: boolean
   state: ChatState
 }
 export interface ChatDetails {
@@ -40,7 +42,7 @@ export const modelOk = (v: string) => MODELS.some((m) => m.value === v)
 export const effortOk = (v: string) => EFFORTS.some((m) => m.value === v)
 
 const CHAT_SELECT = `SELECT c.id, c.project_id, c.title, c.branch, c.session_id, c.worker_id, w.name AS worker_name, c.created_at, c.updated_at,
-  c.model, c.effort, c.seen_message_id,
+  c.model, c.effort, c.seen_message_id, c.branch_open,
   (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS message_count,
   (SELECT m.id FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_id,
   (SELECT m.status FROM chat_messages m WHERE m.chat_id = c.id AND m.role = 'assistant' AND m.status != 'pending' ORDER BY m.id DESC LIMIT 1) AS last_done_status,
@@ -48,10 +50,11 @@ const CHAT_SELECT = `SELECT c.id, c.project_id, c.title, c.branch, c.session_id,
      WHERE m.chat_id = c.id AND m.status = 'pending' ORDER BY m.id DESC LIMIT 1) AS pending_job_status
   FROM chats c LEFT JOIN workers w ON w.id = c.worker_id`
 
-type ChatRow = Omit<Chat, 'state'> & { last_done_id: number | null; last_done_status: string | null; pending_job_status: string | null }
+type ChatRow = Omit<Chat, 'state' | 'branch_open'> & { branch_open: number; last_done_id: number | null; last_done_status: string | null; pending_job_status: string | null }
 
 function toChat(r: ChatRow): Chat {
-  const { last_done_id, last_done_status, pending_job_status, ...chat } = r
+  const { last_done_id, last_done_status, pending_job_status, branch_open, ...rest } = r
+  const chat = { ...rest, branch_open: !!branch_open }
   let state: ChatState = 'idle'
   if (pending_job_status === 'running') state = 'running'
   else if (pending_job_status === 'queued') state = 'queued'
@@ -140,11 +143,12 @@ export const hasPendingReply = (db: Db, chatId: number) =>
   !!db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND status = 'pending'").get(chatId)
 
 /** Enregistre le message de l'utilisateur et la reponse « en attente » liee a la tache. */
-export function addExchange(db: Db, chatId: number, prompt: string, jobId: number) {
+export function addExchange(db: Db, chatId: number, prompt: string, jobId: number): number {
   const now = Date.now()
-  db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, created_at) VALUES (?, 'user', ?, 'done', ?)").run(chatId, prompt, now)
+  const user = db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, created_at) VALUES (?, 'user', ?, 'done', ?)").run(chatId, prompt, now)
   db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, job_id, created_at) VALUES (?, 'assistant', '', 'pending', ?, ?)").run(chatId, jobId, now + 1)
   db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, chatId)
+  return Number(user.lastInsertRowid) // message de l'utilisateur (les fichiers joints y sont rattaches)
 }
 
 const pick = (r: Record<string, unknown>): ChatDetails => ({
@@ -176,8 +180,8 @@ export function syncChat(db: Db, userId: number, chatId: number) {
       const text = typeof r.text === 'string' ? r.text : ''
       db.prepare("UPDATE chat_messages SET status = 'done', content = ?, details_json = ? WHERE id = ?").run(text || '(reponse vide)', JSON.stringify(pick(r)).slice(0, 60_000), m.id)
       // La conversation Claude et le dossier de travail vivent sur CE Worker : les messages suivants y retournent.
-      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ? WHERE id = ?')
-        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), chatId)
+      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ?, branch_open = CASE WHEN ? THEN 1 ELSE branch_open END WHERE id = ?')
+        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), typeof r.branch === 'string' && r.branch ? 1 : 0, chatId)
     } else {
       db.prepare('UPDATE chat_messages SET status = ?, content = ? WHERE id = ?')
         .run(job.status === 'cancelled' ? 'cancelled' : 'failed', job.error ?? (job.status === 'cancelled' ? 'Annulee.' : 'La tache a echoue.'), m.id)
@@ -185,6 +189,10 @@ export function syncChat(db: Db, userId: number, chatId: number) {
     }
   }
 }
+
+/** Toutes les taches des reponses d'un chat (en cours ou terminees). */
+export const allJobIds = (db: Db, chatId: number) =>
+  (db.prepare('SELECT job_id FROM chat_messages WHERE chat_id = ? AND job_id IS NOT NULL').all(chatId) as unknown as { job_id: number }[]).map((r) => r.job_id)
 
 export const pendingJobIds = (db: Db, chatId: number) =>
   (db.prepare("SELECT job_id FROM chat_messages WHERE chat_id = ? AND status = 'pending' AND job_id IS NOT NULL").all(chatId) as unknown as { job_id: number }[]).map((r) => r.job_id)

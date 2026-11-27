@@ -48,11 +48,18 @@ d'environnement (jamais en argument ni dans `.git/config`), limite a github.com,
 
 ## Requetes IA (`ai.chat`)
 
-Prepare la branche (voir ci-dessus), lance le CLI **Claude Code** dessus (`claude -p --output-format stream-json --verbose`, conversation reprise avec `--resume`, `--model` / `--effort` selon le chat), commite ce que l'IA aurait oublie de commiter,
-pousse la branche, et renvoie la reponse, les commits et le diff. Pendant l'execution, chaque etape de Claude (pensee, outil, texte) est transmise en direct au Host. Il faut que `claude` soit installe et connecte sur cette machine (`npm install -g @anthropic-ai/claude-code`, puis `claude` une fois).
-Le prompt passe par l'entree standard ; les droits de l'IA sont limites par un fichier de reglages : lecture / edition de fichiers, recherche et `git` (sans `push` ni `remote`), pas de reseau,
-et tout ce qui demanderait une autorisation est refuse (`--permission-prompts none`). Modifier `DEFAULT_ALLOW` / `DEFAULT_DENY` dans `src/ai.ts` pour changer ces droits.
+Lance le CLI **Claude Code** (`claude -p --output-format stream-json --verbose`, conversation reprise avec `--resume`, `--model` / `--effort` selon le chat) **dans l'atelier du chat** (`<espace>/_atelier/<chat>`,
+dossier stable : la conversation Claude y est rattachee) et renvoie la reponse, les commits et le diff. Pendant l'execution, chaque etape de Claude (pensee, outil, texte) est transmise en direct au Host.
+Il faut que `claude` soit installe et connecte sur cette machine (`npm install -g @anthropic-ai/claude-code`, puis `claude` une fois).
 
+- **Atelier** : cree au premier message ; copie superficielle du depot de maquette du compte GitHub (le lien vers GitHub est retire : rien ne peut en partir), sinon dossier vide avec un tsconfig. Nettoye apres 30 jours d'inactivite.
+- **Projet** : l'IA l'atteint par l'outil `project` du Worker : `read` = copie en LECTURE SEULE de la branche principale (restauree apres chaque tour), `open_branch` = branche de travail du chat (worktree), dont commit, diff et push sont ensuite automatiques (jamais de push force, jamais sur la branche principale).
+- **Outils de l'IA** (`src/tools.ts`, `src/chat-tools.ts`) : un serveur MCP local (`127.0.0.1`, jeton secret par tache) fournit `ui_preview` (capture d'une story, rendue par l'emulateur) et `project`. Claude est lance avec `--strict-mcp-config` : il n'a que ces outils, pas les connecteurs personnels de la machine.
+- **Droits** : le prompt passe par l'entree standard ; lecture / edition de fichiers, recherche et `git` (sans `push` ni `remote`, `-C` compris), pas de reseau, et tout ce qui demanderait une autorisation est refuse (`--permission-prompts none`). Modifier `DEFAULT_ALLOW` / `DEFAULT_DENY` dans `src/ai.ts` pour changer ces droits.
+
+## Apercus d'interface
+
+Quand la reponse de l'IA contient un bloc ```rpm-ui, le Worker construit l'apercu de la story avec l'emulateur (`../ui-emulator`, `npm ci` une fois) et l'envoie au Host ; si la story echoue ou s'affiche vide, l'IA est relancee **une fois** avec l'erreur (`fixRounds`). Le plugin `../ui-framework/plugin` (skill `rpm-ui`) est charge a chaque requete (`--plugin-dir`). Le Worker annonce l'outil « Apercus UI » quand l'emulateur est installe. Details : [`../ui-framework/README.md`](../ui-framework/README.md).
 ## Configuration : `worker/.env`
 
 Ecrit par le bouton *Jumeler* (voir `.env.example`), modifiable a la main :

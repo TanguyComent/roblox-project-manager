@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -260,4 +260,85 @@ test('espace de travail : reglage depuis l\'agent, ecrit dans .env sans toucher 
   assert.equal(readFileSync(envPath, 'utf8').match(/RPM_WORKSPACE_DIR/g)!.length, 1, 'remplace, ne duplique pas')
   assert.equal(agent.setWorkspace('').ok, true)
   assert.equal(readWorkspace(envPath), null)
+})
+
+// --- ateliers, copie en lecture seule, protections imbriquees ----------------------------------------------------------------------
+
+test('projectPaths : noms valides avant tout chemin (rien n\'est cree hors de l\'espace de travail)', () => {
+  const { ws, g } = setup()
+  const parent = join(ws!, '..')
+  for (const [project, branch] of [['../evil', 'b'], ['a/b', 'b'], ['..', 'b'], ['ok', '--force'], ['ok', 'a..b'], ['ok', '../x'], ['', 'b'], ['con', 'b']]) {
+    assert.throws(() => g.projectPaths(project, branch), /invalide|manquant/, `${project} ${branch}`)
+  }
+  assert.ok(!existsSync(join(parent, 'evil')))
+  const p = g.projectPaths('jeu', 'ai/chat-3')
+  assert.equal(p.repo, join(realpathSync(ws!), 'jeu', 'repo'))
+  assert.equal(p.worktree, join(realpathSync(ws!), 'jeu', 'branches', 'ai+chat-3'))
+})
+
+test('atelier : identifiant de chat verifie, depot de maquette filtre comme les autres URL, nettoyage par anciennete', async () => {
+  const ws = tmp()
+  const clock = { t: 1_000_000_000_000 }
+  const g = createGit({ workspace: () => ws, now: () => clock.t }) // filtre d'URL PAR DEFAUT (https / ssh)
+  const c = ctx({})
+  for (const bad of [0, -1, 1.5, NaN, 1e12, '1' as unknown as number]) assert.throws(() => g.atelierPath(bad), /chat invalide/)
+  await rejects(g.ensureAtelier(1, { url: 'file:///etc/passwd' }, c), /Adresse du depot de maquette refusee/)
+  await rejects(g.ensureAtelier(1, { url: '--upload-pack=x' }, c), /refusee/)
+  await rejects(g.ensureAtelier(1, { url: 'https://github.com/a/b', base: '--orphan' }, c), /Nom de branche invalide/)
+  assert.ok(!existsSync(g.atelierPath(1)) || readdirSync(g.atelierPath(1)).length === 0, 'un refus ne laisse pas de dossier rempli')
+
+  // ateliers vides (sans kit) : conserves 30 jours, puis nettoyes ; l'usage repousse l'echeance
+  await g.ensureAtelier(1, null, c)
+  await g.ensureAtelier(2, null, c)
+  clock.t += 20 * 86_400_000
+  await g.ensureAtelier(2, null, c) // reutilise : touche
+  clock.t += 15 * 86_400_000
+  assert.deepEqual(g.sweepAteliers(), [1], '35 jours sans usage : nettoye ; 15 jours : conserve')
+  assert.ok(!existsSync(g.atelierPath(1)) && existsSync(g.atelierPath(2)))
+  assert.deepEqual(g.sweepAteliers(), [], 'rien de plus')
+  await g.withAtelier(2, async () => { assert.deepEqual(g.sweepAteliers(-1), [], 'un atelier en cours d\'utilisation n\'est jamais nettoye') })
+  assert.deepEqual(g.sweepAteliers(-1), [2])
+})
+
+test('la protection « en cours d\'utilisation » s\'imbrique (git.prepare dans une tache deja protegee)', async () => {
+  const bare = remote()
+  const { g, h } = setup()
+  await h['git.prepare'](ctx({ project: 'p', url: bare, branch: 'b' }))
+  const state = { stillBusy: false, removed: [] as string[] }
+  await g.withProject('p', async () => {
+    await h['git.status'](ctx({ project: 'p', branch: 'b' })) // appelle withProject('p') a son tour, puis le libere
+    state.removed = (await g.sweep(0)).removed // encore dans la tache externe : rien ne doit etre nettoye
+  })
+  assert.deepEqual(state.removed, [])
+  assert.deepEqual((await g.sweep(0)).removed.sort(), ['p', 'p/b'], 'une fois la tache finie, le nettoyage a de nouveau la main')
+})
+
+test('copie de reference : branche principale a jour, remise a zero, dossier reserve d\'avance accepte', async () => {
+  const bare = remote()
+  const { ws, g } = setup()
+  const c = ctx({})
+  const paths = g.projectPaths('jeu', 'ai/chat-1')
+  mkdirSync(paths.repo, { recursive: true }) // reserve d'avance (l'IA doit pouvoir y lire des l'ouverture)
+  const ref = await g.reference('jeu', bare, c)
+  assert.equal(ref.path, paths.repo)
+  assert.equal(ref.cloned, true)
+  assert.equal(ref.defaultBranch, 'main')
+  assert.equal(readFileSync(join(ref.path, 'a.txt'), 'utf8'), 'un')
+
+  // quelqu'un pousse sur main : le prochain appel recupere
+  const other = tmp()
+  git(other, 'clone', '-q', bare, 'x')
+  commit(join(other, 'x'), 'b.txt', 'deux'); git(join(other, 'x'), 'push', '-q')
+  const again = await g.reference('jeu', bare, c)
+  assert.equal(again.cloned, false)
+  assert.ok(existsSync(join(ref.path, 'b.txt')), 'a jour')
+
+  // modifications de l'IA : detectees puis restaurees
+  writeFileSync(join(ref.path, 'a.txt'), 'modifie'); writeFileSync(join(ref.path, 'intrus.txt'), 'x')
+  assert.equal(await g.cleanReference('jeu', c), 2)
+  assert.equal(readFileSync(join(ref.path, 'a.txt'), 'utf8'), 'un')
+  assert.ok(!existsSync(join(ref.path, 'intrus.txt')))
+  assert.equal(await g.cleanReference('jeu', c), 0)
+  assert.equal(await g.cleanReference('inconnu', c), 0, 'pas de clone : rien a restaurer')
+  void ws
 })

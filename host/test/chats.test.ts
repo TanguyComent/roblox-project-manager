@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import { serve } from '@hono/node-server'
 import { createUser } from '../src/auth.ts'
+import { saveConnection, updateUiTemplate } from '../src/github-connection.ts'
+import { config } from '../src/config.ts'
 import { createChat, deleteChat, getChat, listChats, listMessages, renameChat } from '../src/chats.ts'
 import { createProject } from '../src/projects.ts'
 import { createWorker, deleteWorker, getJob } from '../src/workers.ts'
@@ -19,7 +21,11 @@ async function waitFor(cond: () => boolean, what: string, ms = 4000) {
   }
 }
 
-type Payload = { project: string; url: string; branch: string; prompt: string; sessionId: string | null; push: boolean; model: string | null; effort: string | null }
+type Payload = {
+  chatId: number; prompt: string; sessionId: string | null; push: boolean; model: string | null; effort: string | null
+  project: { slug: string; url: string; branch: string; base: string | null; open: boolean } | null
+  atelier: { url: string; base: string | null } | null
+}
 
 async function setup(repo: string | null = 'acme/jeu') {
   const c = client()
@@ -48,7 +54,8 @@ async function setup(repo: string | null = 'acme/jeu') {
     n++
     return {
       text: `Reponse ${n} <b>gras</b>`, sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', costUsd: 0.0123, durationMs: 4200, turns: 2,
-      project: p.project, branch: p.branch, head: 'abc1234', commits: [`abc1234 Commit ${n}`], diffStat: ' a.txt | 1 +', diff: '+<script>alert(1)</script>', pushed: true, pushError: null, leftoverFiles: 0,
+      project: p.project?.slug ?? null, branch: p.project && (p.project.open || p.prompt.includes('OUVRE')) ? p.project.branch : null, branchOpened: !!p.project && !p.project.open && p.prompt.includes('OUVRE'),
+      head: 'abc1234', commits: [`abc1234 Commit ${n}`], diffStat: ' a.txt | 1 +', diff: '+<script>alert(1)</script>', pushed: true, pushError: null, leftoverFiles: 0,
     }
   }
   const addWorker = (name: string, caps: string[] = ['git', 'claude'], uid = userId) => {
@@ -90,7 +97,7 @@ test('les pages de chats exigent une session complete et un jeton CSRF', async (
   } finally { await t.close() }
 })
 
-test('creer, lister, ouvrir et supprimer un chat ; chaque chat a sa branche', async () => {
+test('creer, lister, ouvrir et supprimer un chat ; deux chats de meme titre ont des branches distinctes (reservees)', async () => {
   const t = await setup()
   try {
     assert.match((await t.c.call('GET', t.base)).text, /Creer le premier chat/)
@@ -113,7 +120,7 @@ test('creer, lister, ouvrir et supprimer un chat ; chaque chat a sa branche', as
 
     const list = (await t.c.call('GET', `${t.base}/${ida}`)).text // la liste des chats est a gauche de chaque chat
     assert.match(list, /Ajouter l&#39;inventaire|Ajouter l'inventaire/)
-    assert.ok(list.includes(chatA.branch))
+    assert.ok(!list.includes(chatA.branch), "la branche n'est pas affichee : elle n'existe pas tant que l'IA ne l'ouvre pas")
     const open = await t.c.call('GET', `${t.base}/${ida}`)
     assert.equal(open.res.status, 200)
     assert.match(open.text, /Que veux-tu faire/)
@@ -138,8 +145,8 @@ test('un message part sur un Worker equipe, la reponse est stockee, la conversat
     await t.settle(chat.id)
 
     const first = t.payloads[0]
-    assert.deepEqual([first.project, first.url, first.branch, first.prompt, first.sessionId, first.push],
-      ['mon-jeu', 'https://github.com/acme/jeu.git', chat.branch, 'Ajoute un inventaire', null, true])
+    assert.deepEqual([first.chatId, first.project, first.prompt, first.sessionId, first.push, first.atelier],
+      [chat.id, { slug: 'mon-jeu', url: 'https://github.com/acme/jeu.git', branch: chat.branch, base: null, open: false }, 'Ajoute un inventaire', null, true, null])
     const job = getJob(t.c.db, t.userId, listMessages(t.c.db, chat.id)[1].job_id!)!
     assert.deepEqual(job.requires, ['git', 'claude'])
     assert.equal(job.worker_id, w.id)
@@ -162,7 +169,7 @@ test('un message part sur un Worker equipe, la reponse est stockee, la conversat
     await t.send(chat.id, 'Ajoute aussi les quetes')
     await t.settle(chat.id)
     assert.equal(t.payloads[1].sessionId, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee')
-    assert.equal(t.payloads[1].branch, chat.branch)
+    assert.equal(t.payloads[1].project!.branch, chat.branch)
     assert.match(await t.page(chat.id), /Reponse 2/)
     assert.equal(listMessages(t.c.db, chat.id).length, 4)
   } finally { await t.close() }
@@ -250,9 +257,8 @@ test('echec de l\'IA, annulation et suppression d\'un chat en cours', async () =
   } finally { await t.close() }
 })
 
-test('validations : message vide ou trop long, projet sans depot GitHub', async () => {
+test('validations : message vide, trop long, valeurs inconnues', async () => {
   const t = await setup()
-  const bare = await setup(null)
   try {
     const w = t.addWorker('PC')
     await t.online(w.id)
@@ -261,13 +267,25 @@ test('validations : message vide ou trop long, projet sans depot GitHub', async 
     const long = await t.send(chat.id, 'x'.repeat(20_001))
     assert.equal(long.res.status, 400)
     assert.equal(t.c.db.prepare('SELECT COUNT(*) AS n FROM jobs').get()!.n, 0, 'aucune tache creee')
+  } finally { await t.close() }
+})
 
-    const c2 = createChat(bare.c.db, bare.project.id, 'Sans depot')
-    const r = await bare.send(c2.id, 'Bonjour')
-    assert.equal(r.res.status, 400)
-    assert.match(r.text, /pas de depot GitHub/)
-    assert.equal(bare.c.db.prepare('SELECT COUNT(*) AS n FROM jobs').get()!.n, 0)
-  } finally { await t.close(); await bare.close() }
+test('un projet sans depot GitHub marche quand meme : l\'IA n\'a que son atelier', async () => {
+  const t = await setup(null)
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Sans depot')
+    const r = await t.send(chat.id, 'Imagine une jauge de vie')
+    assert.equal(r.res.status, 303)
+    await t.settle(chat.id)
+    assert.equal(t.payloads[0].project, null, 'pas de depot : aucun projet transmis au Worker')
+    assert.equal(getChat(t.c.db, t.project.id, chat.id)!.branch_open, false)
+    const page = await t.page(chat.id)
+    assert.doesNotMatch(page, /<textarea[^>]*name="prompt"[^>]*disabled/)
+    assert.match(page, /class="chip accent"[^>]*>Atelier</)
+    assert.ok(!/pas de depot GitHub/.test(page), 'plus de refus : rien a configurer pour discuter')
+  } finally { await t.close() }
 })
 
 test('si le Worker du chat est supprime, un autre prend le relais avec une nouvelle conversation', async () => {
@@ -289,7 +307,7 @@ test('si le Worker du chat est supprime, un autre prend le relais avec une nouve
     await t.send(chat.id, 'Deux')
     await t.settle(chat.id)
     assert.equal(t.payloads[1].sessionId, null, 'la session Claude etait sur l\'ancienne machine')
-    assert.equal(t.payloads[1].branch, chat.branch, 'meme branche : le travail pousse est retrouve')
+    assert.equal(t.payloads[1].project!.branch, chat.branch, 'meme branche : le travail pousse est retrouve')
   } finally { await t.close() }
 })
 
@@ -472,7 +490,7 @@ test('titre et branche deduits du premier message ; renommer ne change pas la br
     const after = getChat(t.c.db, t.project.id, chat.id)!
     assert.equal(after.title, "Corrige le bug de l'inventaire")
     assert.equal(after.branch, `ai/chat-${chat.id}-corrige-le-bug-de-l-inventaire`)
-    assert.equal(t.payloads[0].branch, after.branch, 'la branche envoyee au Worker est celle deduite du titre')
+    assert.equal(t.payloads[0].project!.branch, after.branch, 'la branche envoyee au Worker est celle deduite du titre')
 
     await t.send(chat.id, 'Autre sujet completement')
     await t.settle(chat.id)
@@ -525,4 +543,83 @@ test('reponses en Markdown, scripts et CSP corrects', async () => {
     assert.match(page.text, /<script src="\/static\/chat\.js\?v=\d+" defer>/)
     assert.ok(!/<script>[^<]/.test(page.text), 'aucun script en ligne')
   } finally { await t.close() }
+})
+
+test('un chat se cree sans branche ni depot : seule la ligne en base existe', async () => {
+  const t = await setup()
+  try {
+    const r = await t.post('', {})
+    assert.equal(r.res.status, 303)
+    const chat = getChat(t.c.db, t.project.id, Number(/chats\/(\d+)/.exec(r.res.headers.get('location')!)![1]))!
+    assert.equal(chat.title, 'Nouveau chat')
+    assert.equal(chat.branch_open, false)
+    assert.equal(t.c.db.prepare("SELECT COUNT(*) AS n FROM jobs").get()!.n, 0, 'aucune tache : rien n\'est prepare sur un Worker')
+    const page = (await t.c.call('GET', `${t.base}/${chat.id}`)).text
+    assert.match(page, /class="chip accent"[^>]*>Atelier</, 'l\'en-tete montre l\'atelier')
+    assert.ok(!page.includes(`>${chat.branch}<`), 'aucune branche n\'est affichee tant qu\'elle n\'est pas ouverte')
+    assert.doesNotMatch(page, /Maquette UI/, 'plus de bouton « Maquette UI » : un seul type de chat')
+    assert.match(page, /Que veux-tu faire/)
+    assert.match(page, /idee d'interface/)
+  } finally { await t.close() }
+})
+
+test('la branche s\'ouvre quand l\'IA modifie le projet : le chat s\'en souvient et la transmet aux tours suivants', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Branche')
+    await t.send(chat.id, 'Une idee de HUD ?')
+    await t.settle(chat.id)
+    assert.equal(getChat(t.c.db, t.project.id, chat.id)!.branch_open, false, 'discussion : aucune branche')
+    assert.equal(t.payloads[0].project!.open, false)
+    assert.ok(!(await t.page(chat.id)).includes(`>${getChat(t.c.db, t.project.id, chat.id)!.branch}<`))
+
+    await t.send(chat.id, 'Ok, OUVRE la branche et code-le')
+    await t.settle(chat.id)
+    const opened = getChat(t.c.db, t.project.id, chat.id)!
+    assert.equal(opened.branch_open, true, 'l\'IA a ouvert la branche pendant ce tour')
+    assert.equal(t.payloads[1].project!.open, false, 'au moment de la demande, elle n\'etait pas ouverte')
+    const html = await t.page(chat.id)
+    assert.ok(html.includes(`${opened.branch}</span>`), 'la branche apparait dans l\'en-tete')
+    assert.doesNotMatch(html, /class="chip accent"[^>]*>Atelier</)
+
+    await t.send(chat.id, 'Continue')
+    await t.settle(chat.id)
+    assert.equal(t.payloads[2].project!.open, true, 'les tours suivants savent que la branche est ouverte')
+    assert.equal(t.payloads[2].project!.branch, opened.branch)
+  } finally { await t.close() }
+})
+
+test('l\'atelier part du depot de maquette choisi dans le compte GitHub (et sa branche) ; le jeton GitHub n\'est jamais transmis', async () => {
+  const t = await setup()
+  const savedFallback = config.uiTemplateRepo
+  config.uiTemplateRepo = null
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Atelier')
+    // 1. rien choisi, pas de depot par defaut : atelier vide
+    await t.send(chat.id, 'Un')
+    await t.settle(chat.id)
+    assert.equal(t.payloads[0].atelier, null)
+    // 2. depot choisi dans Compte > GitHub
+    saveConnection(t.c.db, t.userId, 'acme', 'ghp_secret_token')
+    updateUiTemplate(t.c.db, t.userId, 'acme/mon-kit-ui', 'ui-v2')
+    await t.send(chat.id, 'Deux')
+    await t.settle(chat.id)
+    assert.deepEqual(t.payloads[1].atelier, { url: 'https://github.com/acme/mon-kit-ui.git', base: 'ui-v2' })
+    assert.ok(!JSON.stringify(t.payloads).includes('ghp_secret_token'))
+    // 3. sans branche choisie
+    updateUiTemplate(t.c.db, t.userId, 'acme/mon-kit-ui', null)
+    await t.send(chat.id, 'Trois')
+    await t.settle(chat.id)
+    assert.deepEqual(t.payloads[2].atelier, { url: 'https://github.com/acme/mon-kit-ui.git', base: null })
+    // 4. depot par defaut de l'instance pour qui n'a rien choisi
+    updateUiTemplate(t.c.db, t.userId, null, null)
+    config.uiTemplateRepo = 'org/defaut'
+    await t.send(chat.id, 'Quatre')
+    await t.settle(chat.id)
+    assert.deepEqual(t.payloads[3].atelier, { url: 'https://github.com/org/defaut.git', base: null })
+  } finally { config.uiTemplateRepo = savedFallback; await t.close() }
 })
