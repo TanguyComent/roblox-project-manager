@@ -1,5 +1,6 @@
 // Coeur du Worker : une connexion SORTANTE vers le Host (rien a ouvrir sur cette machine), reconnectee automatiquement.
 import { defaultHandlers, JobCancelled, type JobHandler } from './jobs.ts'
+import { downloadAttachment } from './attachments.ts'
 import { uploadPreview } from './upload.ts'
 import { CLOSE, PROTOCOL_VERSION, WORKER_WS_PATH, type Capability, type HostMessage, type WorkerMessage } from './protocol.ts'
 
@@ -66,6 +67,7 @@ export function startWorker(opts: WorkerOptions): RunningWorker {
         jobId, payload, signal: abort.signal,
         event: (level, text, kind) => send({ type: 'event', jobId, level, text, ...(kind ? { kind } : {}) }),
         uploadPreview: (dir, meta) => uploadPreview(opts.hostUrl, opts.token, jobId, dir, meta),
+        downloadAttachment: (id) => downloadAttachment(opts.hostUrl, opts.token, id),
       })
       send({ type: 'result', jobId, ok: true, output })
       log(`tache ${jobId} : terminee`)

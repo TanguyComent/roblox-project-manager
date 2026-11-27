@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type { Git } from './git.ts'
 import { GitError } from './git.ts'
 import { JobCancelled, type JobContext, type JobHandler } from './jobs.ts'
+import { attachmentList, attachmentsBlock, deliverAttachments, type Delivered } from './attachments.ts'
 import { chatTools, type ChatToolsState } from './chat-tools.ts'
 import { buildPreviews, fixRequest, type PreviewResult } from './preview.ts'
 import { ToolServer } from './tools.ts'
@@ -252,6 +253,17 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         }
         const cwd = atelier.path
 
+        // 1 bis. fichiers joints : telecharges dans <atelier>/_uploads (un echec n'arrete pas la conversation)
+        let delivered: Delivered[] = []
+        const wanted = attachmentList(ctx.payload)
+        if (wanted.length) {
+          if (!ctx.downloadAttachment) ctx.event('warn', 'Ce Worker ne sait pas telecharger les fichiers joints.')
+          else {
+            ctx.event('info', `Telechargement de ${wanted.length} fichier(s) joint(s)…`)
+            delivered = await deliverAttachments(cwd, wanted, ctx.downloadAttachment, (t) => ctx.event('warn', t))
+          }
+        }
+
         // 2. le projet : dossiers reserves d'avance (pour que l'IA puisse y lire / ecrire), branche ouverte seulement si elle l'a deja ete
         const paths = p.project ? o.git.projectPaths(p.project.slug, p.project.branch) : null
         if (paths) { reserve(paths.repo); reserve(paths.worktree) }
@@ -297,7 +309,7 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
             return buildPreviews(text, { project: roots.project, sandbox: roots.sandbox, emulatorDir: o.emulatorDir, upload: ctx.uploadPreview, signal: ctx.signal, event: ctx.event })
           }
           ctx.event('info', sessionId ? 'Claude reprend la conversation…' : 'Claude demarre…')
-          result = await turn(context() + prompt, sessionId as string | null)
+          result = await turn(context() + attachmentsBlock(delivered) + prompt, sessionId as string | null)
           previews = await build(result.text)
           const problems = fixRequest(previews)
           if (problems && result.sessionId && (o.fixRounds ?? 1) > 0) {

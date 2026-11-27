@@ -143,11 +143,12 @@ export const hasPendingReply = (db: Db, chatId: number) =>
   !!db.prepare("SELECT 1 FROM chat_messages WHERE chat_id = ? AND status = 'pending'").get(chatId)
 
 /** Enregistre le message de l'utilisateur et la reponse « en attente » liee a la tache. */
-export function addExchange(db: Db, chatId: number, prompt: string, jobId: number) {
+export function addExchange(db: Db, chatId: number, prompt: string, jobId: number): number {
   const now = Date.now()
-  db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, created_at) VALUES (?, 'user', ?, 'done', ?)").run(chatId, prompt, now)
+  const user = db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, created_at) VALUES (?, 'user', ?, 'done', ?)").run(chatId, prompt, now)
   db.prepare("INSERT INTO chat_messages (chat_id, role, content, status, job_id, created_at) VALUES (?, 'assistant', '', 'pending', ?, ?)").run(chatId, jobId, now + 1)
   db.prepare('UPDATE chats SET updated_at = ? WHERE id = ?').run(now, chatId)
+  return Number(user.lastInsertRowid) // message de l'utilisateur (les fichiers joints y sont rattaches)
 }
 
 const pick = (r: Record<string, unknown>): ChatDetails => ({

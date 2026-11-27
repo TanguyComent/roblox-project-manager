@@ -385,3 +385,25 @@ ul.diag li { padding: 8px 10px; background: var(--surface2); border: 1px solid v
 .chip.accent { color: var(--accent); border-color: rgba(139, 124, 255, .4); background: var(--accent-soft); }
 .chat-list-head .newrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .chat-list-head .newrow button { width: 100%; }
+
+/* Fichiers joints */
+.attach-staged { display: flex; flex-wrap: wrap; gap: 8px; }
+.attach-staged:not(:empty) { padding: 2px 2px 8px; }
+.afiles { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.afiles:last-child { margin-bottom: 0; }
+.athumb { display: block; line-height: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--line2); }
+.athumb img { max-width: 220px; max-height: 160px; object-fit: cover; display: block; }
+.achip { position: relative; display: inline-flex; align-items: center; gap: 8px; max-width: 260px; min-height: 36px; padding: 4px 10px 4px 6px; font-size: 12.5px; color: var(--text); text-decoration: none; background: var(--surface3); border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
+.achip img { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; flex: none; }
+.achip .ak { flex: none; min-width: 28px; padding: 3px 5px; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: .03em; color: var(--accent); background: var(--accent-soft); border-radius: 6px; }
+.achip .an { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.achip .as { flex: none; color: var(--muted); font-size: 11.5px; }
+.achip .x { flex: none; width: 20px; height: 20px; min-height: 0; padding: 0; line-height: 1; border-radius: 50%; color: var(--muted); background: transparent; border: 0; }
+.achip .x:hover { color: var(--text); background: var(--line2); }
+.achip.uploading { opacity: .8; }
+.achip .bar { position: absolute; left: 0; bottom: 0; height: 3px; width: var(--p, 0%); background: var(--accent); transition: width .1s; }
+.composer-bar .attach { padding: 0 8px; min-height: 34px; }
+.composer-bar .attach svg { width: 18px; height: 18px; }
+.chat-main { position: relative; }
+.chat-app.dropping .composer { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chat-app.dropping .chat-main::after { content: 'Depose tes fichiers pour les joindre'; position: absolute; inset: 12px; display: grid; place-items: center; font-size: 16px; color: var(--accent); background: rgba(10, 12, 18, .72); border: 2px dashed var(--accent); border-radius: 16px; pointer-events: none; z-index: 20; }

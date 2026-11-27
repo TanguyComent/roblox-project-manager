@@ -19,6 +19,7 @@ import { createGithubClient, type GithubFactory } from './github.ts'
 import { createRobloxClient, type RobloxClient } from './roblox.ts'
 import { robloxRoutes } from './roblox-routes.ts'
 import { projectRoutes } from './project-routes.ts'
+import { attachmentRoutes } from './attachment-routes.ts'
 import { chatRoutes } from './chat-routes.ts'
 import { previewRoutes } from './preview-routes.ts'
 import { workerRoutes } from './worker-routes.ts'
@@ -55,6 +56,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   // --- en-tetes de securite -------------------------------------------------------------------------------------------------
   app.use('*', async (c, next) => {
     await next()
+    if (/^\/projects\/\d+\/chats\/\d+\/attachments\/[0-9a-f]{32}$/.test(c.req.path) && c.res.headers.has('Content-Security-Policy')) return // fichier joint : politique propre (sandbox), voir chat-routes.ts
     if (c.req.path.startsWith('/preview/')) return // les apercus d'interface portent leur propre politique (voir preview-routes.ts)
     c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     c.header('X-Content-Type-Options', 'nosniff')
@@ -68,7 +70,8 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   const smallBody = bodyLimit({ maxSize: 16 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
   const chatBody = bodyLimit({ maxSize: 100 * 1024, onError: (c) => c.text('Requete trop volumineuse', 413) })
   const previewBody = bodyLimit({ maxSize: 24 * 1024 * 1024, onError: (c) => c.json({ error: 'Apercu trop gros.' }, 413) }) // 12 Mo de fichiers en base64
-  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : c.req.path === '/api/worker/previews' ? previewBody(c, next) : smallBody(c, next)))
+  const uploadBody = bodyLimit({ maxSize: config.attach.maxFile + 64 * 1024, onError: (c) => c.json({ error: `Fichier trop gros (${Math.round(config.attach.maxFile / 1048576)} Mo maximum).` }, 413) })
+  app.use('*', (c, next) => (/^\/projects\/\d+\/chats\/\d+\/messages$/.test(c.req.path) ? chatBody(c, next) : /^\/projects\/\d+\/chats\/\d+\/attachments$/.test(c.req.path) ? uploadBody(c, next) : c.req.path === '/api/worker/previews' ? previewBody(c, next) : smallBody(c, next)))
 
   // --- controle d'origine : toute requete qui modifie l'etat doit venir de ce site ----------------------------------------------
   app.use('*', async (c, next) => {
@@ -164,6 +167,7 @@ export function createApp(db: Db, opts: { githubFor?: GithubFactory; roblox?: Ro
   workerRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
   chatRoutes(app, { db, hub, html, form, csrfOk, requireFull: shared.requireFull })
   previewRoutes(app, { db })
+  attachmentRoutes(app, { db })
 
   // Connexion --------------------------------------------------------------------------------------------------------------------
   app.get('/login', (c) => {

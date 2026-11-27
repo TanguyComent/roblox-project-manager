@@ -226,6 +226,21 @@ export const MIGRATIONS = [
    UPDATE chats SET branch_open = 1 WHERE mode = 'project' AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.chat_id = chats.id);
    UPDATE chats SET session_id = NULL;
    ALTER TABLE previews ADD COLUMN root TEXT NOT NULL DEFAULT 'project';`,
+  // 14 : fichiers joints aux messages d'un chat (images, PDF, autres). message_id NULL = televerse mais message pas encore envoye.
+  `CREATE TABLE chat_attachments (
+     id TEXT PRIMARY KEY,              -- 128 bits aleatoires : nom du fichier sur le disque (jamais le nom d'origine)
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+     message_id INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL,
+     name TEXT NOT NULL,               -- nom d'origine, nettoye
+     kind TEXT NOT NULL CHECK (kind IN ('image', 'pdf', 'text', 'other')),
+     mime TEXT NOT NULL,               -- deduit des octets
+     size INTEGER NOT NULL,
+     sha256 TEXT NOT NULL,
+     created_at INTEGER NOT NULL
+   );
+   CREATE INDEX chat_attachments_chat ON chat_attachments(chat_id, id);
+   CREATE INDEX chat_attachments_user ON chat_attachments(user_id);`,
 ]
 
 export function openDb(file?: string): Db {
