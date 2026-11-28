@@ -140,11 +140,12 @@ export function libraryHandlers(o: LibraryOptions = {}): Record<string, JobHandl
         writeFileSync(settings, JSON.stringify({ permissions: { allow: ['Write', 'mcp__rpm__library_search', 'mcp__rpm__library_get'], deny: [...DEFAULT_DENY, 'Bash', 'Edit'] } }))
         const mcp = join(dir, '.mcp.json')
         writeFileSync(mcp, JSON.stringify({ mcpServers: { rpm: { type: 'http', url: session.url, headers: { Authorization: `Bearer ${session.token}` } } } }), { mode: 0o600 })
-        const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings, '--mcp-config', mcp, '--strict-mcp-config', '--effort', 'low']
+        const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings, '--mcp-config', mcp, '--strict-mcp-config', '--effort', 'low', '--max-budget-usd', '0.6']
         if (o.model && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(o.model)) args.push('--model', o.model)
         ctx.event('info', "L'IA cherche dans tes images…")
         const out = await runClaude(claude.cmd, args, dir, findPrompt(query, limit), ctx, o.timeoutMs ?? 8 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, dir)) ctx.event('info', s.text, s.kind) })
         const r = parseClaudeOutput(out)
+        if (r.limit) throw new GitError("L'agent a atteint son plafond de cout avant d'avoir termine : reessaie avec moins d'images.")
         const resultFile = join(dir, 'result.json')
         if (!existsSync(resultFile)) throw new GitError("L'agent n'a pas produit de resultat (result.json manquant).")
         let parsed: unknown
@@ -191,11 +192,12 @@ export function libraryHandlers(o: LibraryOptions = {}): Record<string, JobHandl
         writeFileSync(settings, JSON.stringify({ permissions: { allow: ['Read', 'Write', 'Glob', 'Grep'], deny: [...DEFAULT_DENY, 'Bash'] } }))
         const mcp = join(dir, '.mcp.json')
         writeFileSync(mcp, JSON.stringify({ mcpServers: {} }))
-        const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings, '--mcp-config', mcp, '--strict-mcp-config', '--effort', 'low']
+        const args = [...claude.args, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--permission-prompts', 'none', '--settings', settings, '--mcp-config', mcp, '--strict-mcp-config', '--effort', 'low', '--max-budget-usd', '1.5']
         if (o.model && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(o.model)) args.push('--model', o.model)
         ctx.event('info', "Claude regarde les images et les range…")
         const out = await runClaude(claude.cmd, args, dir, prompt(files, vocab), ctx, o.timeoutMs ?? 20 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, dir)) ctx.event('info', s.text, s.kind) })
         const r = parseClaudeOutput(out)
+        if (r.limit) throw new GitError("L'agent a atteint son plafond de cout avant d'avoir termine : reessaie avec moins d'images.")
 
         // 3. le resultat : on le lit, on le relie aux identifiants ; le Host revalide tout
         const resultFile = join(dir, 'result.json')

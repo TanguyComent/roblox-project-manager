@@ -415,3 +415,84 @@ test('apercu en echec : UNE passe de correction automatique dans la meme convers
   assert.equal(r2.previews[0].ok, false)
   assert.ok(!off.calls()[0].args.includes('--plugin-dir'))
 })
+
+// --- consommation : contexte seulement quand il change, plafonds par message ------------------------------------------------------------------------------
+
+test('contexte : envoye au demarrage, puis seulement s il change ou tous les 10 messages', async () => {
+  const t = setup()
+  const first = await run(t.h, payload(null, { prompt: 'Bonjour' }, null))
+  assert.equal(first.contextSent, true)
+  assert.match(first.contextHash, /^[0-9a-f]{16}$/)
+  const hash = first.contextHash as string
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const prompts = () => t.calls().map((c) => c.prompt)
+  assert.match(prompts()[0], /\[Contexte automatique\]/)
+
+  const second = await run(t.h, payload(null, { prompt: 'Et ensuite ?', sessionId: sid, contextHash: hash, contextAge: 1 }, null))
+  assert.equal(second.contextSent, false, 'meme contexte, conversation reprise : rien a renvoyer')
+  assert.equal(second.contextHash, hash)
+  assert.doesNotMatch(prompts()[1], /\[Contexte automatique\]|Tu n'as pas de shell/)
+  assert.match(prompts()[1], /^\[Demande\]\nEt ensuite \?/)
+
+  const aged = await run(t.h, payload(null, { prompt: 'Encore', sessionId: sid, contextHash: hash, contextAge: 10 }, null))
+  assert.equal(aged.contextSent, true, 'rappel periodique (la compaction peut resumer les regles)')
+  assert.match(prompts()[2], /\[Contexte automatique\]/)
+
+  const changed = await run(t.h, payload(null, { prompt: 'Autre', sessionId: sid, contextHash: 'ffffffffffffffff', contextAge: 1 }, null))
+  assert.equal(changed.contextSent, true, 'le contexte a change')
+  const unknown = await run(t.h, payload(null, { prompt: 'Ancien chat', sessionId: sid }, null))
+  assert.equal(unknown.contextSent, true, 'chat cree avant ce mecanisme : on renvoie une fois')
+  const fresh = await run(t.h, payload(null, { prompt: 'Nouvelle session', sessionId: null, contextHash: hash, contextAge: 1 }, null))
+  assert.equal(fresh.contextSent, true, 'nouvelle conversation Claude : le contexte est indispensable')
+})
+
+test('contexte : l ouverture de la branche change le contexte et le fait renvoyer', async () => {
+  const bare = remote()
+  const t = setup()
+  const a = await run(t.h, payload(bare, { prompt: 'Salut' }))
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const same = await run(t.h, payload(bare, { prompt: 'Suite', sessionId: sid, contextHash: a.contextHash, contextAge: 1 }))
+  assert.equal(same.contextSent, false)
+  const opened = await run(t.h, payload(bare, { prompt: 'Suite', sessionId: sid, contextHash: a.contextHash, contextAge: 2 }, { open: true }))
+  assert.equal(opened.contextSent, true, 'projet ouvert : contexte different')
+  assert.notEqual(opened.contextHash, a.contextHash)
+})
+
+test('plafonds : drapeaux transmis au CLI (valeurs par defaut, options, desactivation)', async () => {
+  const flag = (args: string[], n: string) => { const i = args.indexOf(n); return i < 0 ? null : args[i + 1] }
+  const a = setup()
+  await run(a.h, payload(null, {}, null))
+  assert.equal(flag(a.calls()[0].args, '--max-turns'), '60')
+  assert.equal(flag(a.calls()[0].args, '--max-budget-usd'), '2')
+  const b = setup({ maxTurns: 12, maxBudgetUsd: 0.5 })
+  await run(b.h, payload(null, {}, null))
+  assert.equal(flag(b.calls()[0].args, '--max-turns'), '12')
+  assert.equal(flag(b.calls()[0].args, '--max-budget-usd'), '0.5')
+  const c = setup({ maxTurns: 0, maxBudgetUsd: 0 })
+  await run(c.h, payload(null, {}, null))
+  assert.equal(flag(c.calls()[0].args, '--max-turns'), null)
+  assert.equal(flag(c.calls()[0].args, '--max-budget-usd'), null)
+})
+
+test('plafond atteint : ce n est pas un echec, la reponse partielle et le cout sont conserves, invitation a continuer', async () => {
+  for (const [kw, limit, re] of [['MAXTURNS', 'turns', /Limite de 5 tours atteinte/], ['MAXBUDGET', 'budget', /Plafond de 0\.75 \$ atteint/]] as const) {
+    const t = setup({ maxTurns: 5, maxBudgetUsd: 0.75 })
+    const r = await run(t.h, payload(null, { prompt: `Fais un gros travail ${kw}` }, null))
+    assert.equal(r.limit, limit)
+    assert.match(r.text, /Je vais ajouter un fichier\./, 'ce que l IA avait deja ecrit')
+    assert.match(r.text, re)
+    assert.match(r.text, /Ecris « continue »/)
+    assert.equal(r.costUsd, 0.3)
+    assert.equal(r.sessionId, '11111111-2222-3333-4444-555555555555', 'la conversation continue')
+    assert.equal(t.calls().length, 1, 'pas de tour de correction apres un plafond')
+  }
+  const ok = await run(setup().h, payload(null, {}, null))
+  assert.equal(ok.limit, null)
+})
+
+test('lecture de la sortie du CLI : plafonds de tours et de budget', () => {
+  const turns = parseClaudeOutput('{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"16716231-8241-46f4-9b71-bfe5a57ceb7a","total_cost_usd":0.06,"num_turns":2,"errors":["Reached maximum number of turns (1)"]}')
+  assert.deepEqual([turns.limit, turns.text, turns.costUsd, turns.turns], ['turns', '', 0.06, 2])
+  assert.equal(parseClaudeOutput('{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":0.07}').limit, 'budget')
+  assert.throws(() => parseClaudeOutput('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Not logged in"}'), /Not logged in/)
+})

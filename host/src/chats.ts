@@ -19,6 +19,8 @@ export interface ChatDetails {
   branch?: string; head?: string; commits?: string[]; diffStat?: string; diff?: string
   costUsd?: number | null; durationMs?: number | null; turns?: number | null
   pushed?: boolean; pushError?: string | null; leftoverFiles?: number
+  /** Un plafond (tours ou cout) a interrompu la reponse. */
+  limit?: 'turns' | 'budget' | null
 }
 export interface ChatMessage {
   id: number; chat_id: number; role: 'user' | 'assistant'; content: string; status: 'done' | 'pending' | 'failed' | 'cancelled'
@@ -163,6 +165,7 @@ const pick = (r: Record<string, unknown>): ChatDetails => ({
   pushed: r.pushed === true,
   pushError: typeof r.pushError === 'string' ? r.pushError : null,
   leftoverFiles: typeof r.leftoverFiles === 'number' ? r.leftoverFiles : 0,
+  limit: r.limit === 'turns' || r.limit === 'budget' ? r.limit : null,
 })
 
 /**
@@ -180,8 +183,10 @@ export function syncChat(db: Db, userId: number, chatId: number) {
       const text = typeof r.text === 'string' ? r.text : ''
       db.prepare("UPDATE chat_messages SET status = 'done', content = ?, details_json = ? WHERE id = ?").run(text || '(reponse vide)', JSON.stringify(pick(r)).slice(0, 60_000), m.id)
       // La conversation Claude et le dossier de travail vivent sur CE Worker : les messages suivants y retournent.
-      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ?, branch_open = CASE WHEN ? THEN 1 ELSE branch_open END WHERE id = ?')
-        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), typeof r.branch === 'string' && r.branch ? 1 : 0, chatId)
+      // contextHash / contextSent : le Worker dit quel contexte il a envoye a la conversation Claude (pour ne le renvoyer que s'il change)
+      const hash = typeof r.contextHash === 'string' && /^[0-9a-f]{8,64}$/.test(r.contextHash) ? r.contextHash : null
+      db.prepare('UPDATE chats SET session_id = COALESCE(?, session_id), worker_id = COALESCE(?, worker_id), updated_at = ?, branch_open = CASE WHEN ? THEN 1 ELSE branch_open END, context_hash = COALESCE(?, context_hash), context_age = CASE WHEN ? THEN 0 ELSE context_age + 1 END WHERE id = ?')
+        .run(typeof r.sessionId === 'string' ? r.sessionId : null, job.worker_id, Date.now(), typeof r.branch === 'string' && r.branch ? 1 : 0, hash, r.contextSent === false ? 0 : 1, chatId)
     } else {
       db.prepare('UPDATE chat_messages SET status = ?, content = ? WHERE id = ?')
         .run(job.status === 'cancelled' ? 'cancelled' : 'failed', job.error ?? (job.status === 'cancelled' ? 'Annulee.' : 'La tache a echoue.'), m.id)
