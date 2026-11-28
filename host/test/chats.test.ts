@@ -25,6 +25,7 @@ type Payload = {
   chatId: number; prompt: string; sessionId: string | null; push: boolean; model: string | null; effort: string | null
   project: { slug: string; url: string; branch: string; base: string | null; open: boolean } | null
   atelier: { url: string; base: string | null } | null
+  contextHash?: string | null; contextAge?: number
 }
 
 async function setup(repo: string | null = 'acme/jeu') {
@@ -55,6 +56,8 @@ async function setup(repo: string | null = 'acme/jeu') {
     return {
       text: `Reponse ${n} <b>gras</b>`, sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', costUsd: 0.0123, durationMs: 4200, turns: 2,
       project: p.project?.slug ?? null, branch: p.project && (p.project.open || p.prompt.includes('OUVRE')) ? p.project.branch : null, branchOpened: !!p.project && !p.project.open && p.prompt.includes('OUVRE'),
+      // comme le vrai Worker : le contexte n'est renvoye qu'au demarrage, s'il change, ou tous les 10 messages
+      contextHash: 'abcdef0123456789', contextSent: p.sessionId === null || p.contextHash !== 'abcdef0123456789' || (p.contextAge ?? 99) >= 10, limit: p.prompt.includes('LIMITE') ? 'turns' : null,
       head: 'abc1234', commits: [`abc1234 Commit ${n}`], diffStat: ' a.txt | 1 +', diff: '+<script>alert(1)</script>', pushed: true, pushError: null, leftoverFiles: 0,
     }
   }
@@ -622,4 +625,54 @@ test('l\'atelier part du depot de maquette choisi dans le compte GitHub (et sa b
     await t.settle(chat.id)
     assert.deepEqual(t.payloads[3].atelier, { url: 'https://github.com/org/defaut.git', base: null })
   } finally { config.uiTemplateRepo = savedFallback; await t.close() }
+})
+
+test('consommation : le Host retient le contexte deja envoye et le Worker ne le renvoie que s il change', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Cout')
+    const ctx = () => ({ ...(t.c.db.prepare('SELECT context_hash AS h, context_age AS a FROM chats WHERE id = ?').get(chat.id) as { h: string | null; a: number }) })
+    assert.deepEqual(ctx(), { h: null, a: 0 })
+    await t.send(chat.id, 'Premier message')
+    await t.settle(chat.id)
+    assert.deepEqual([t.payloads[0].contextHash, t.payloads[0].contextAge], [null, 0], 'rien envoye encore')
+    assert.deepEqual(ctx(), { h: 'abcdef0123456789', a: 0 }, 'contexte envoye : age remis a zero')
+    await t.send(chat.id, 'Deuxieme')
+    await t.settle(chat.id)
+    assert.deepEqual([t.payloads[1].contextHash, t.payloads[1].contextAge], ['abcdef0123456789', 0])
+    assert.deepEqual(ctx(), { h: 'abcdef0123456789', a: 1 }, 'contexte NON renvoye : un message de plus')
+    await t.send(chat.id, 'Troisieme')
+    await t.settle(chat.id)
+    assert.equal(t.payloads[2].contextAge, 1)
+    assert.equal(ctx().a, 2)
+    // rappel periodique apres 10 messages
+    t.c.db.prepare('UPDATE chats SET context_age = 10 WHERE id = ?').run(chat.id)
+    await t.send(chat.id, 'Quatrieme')
+    await t.settle(chat.id)
+    assert.equal(ctx().a, 0, 'contexte renvoye : age remis a zero')
+  } finally { await t.close() }
+})
+
+test('consommation : cout cumule du chat dans l en-tete (et en direct), plafond atteint signale', async () => {
+  const t = await setup()
+  try {
+    const w = t.addWorker('PC')
+    await t.online(w.id)
+    const chat = createChat(t.c.db, t.project.id, 'Cout')
+    assert.match(await t.page(chat.id), /id="chat-cost"[^>]* hidden>/, 'pas de cout avant la premiere reponse')
+    await t.send(chat.id, 'Un')
+    await t.settle(chat.id)
+    await t.send(chat.id, 'Deux')
+    await t.settle(chat.id)
+    const html = await t.page(chat.id)
+    assert.match(html, /id="chat-cost"[^>]*>≈ 0\.025 \$ · 2 reponses<\/span>/, '2 x 0,0123 $')
+    const live = JSON.parse((await t.c.call('GET', `${t.base}/${chat.id}/live`, undefined, { accept: 'application/json' })).text) as { cost: string }
+    assert.equal(live.cost, '≈ 0.025 $ · 2 reponses')
+    assert.doesNotMatch(html, /limite de tours atteinte/)
+    await t.send(chat.id, 'Un gros travail LIMITE')
+    await t.settle(chat.id)
+    assert.match(await t.page(chat.id), /limite de tours atteinte/)
+  } finally { await t.close() }
 })

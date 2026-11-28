@@ -4,6 +4,7 @@
 // Securite : le prompt passe par l'entree standard (jamais dans la ligne de commande), les autres arguments sont constants ou valides, et les droits
 // de l'IA sont limites par un fichier de reglages (lecture / edition de fichiers + git hors push) ; tout ce qui demanderait une autorisation est refuse.
 import { spawn, execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +30,9 @@ export interface AiOptions {
   /** Commande du CLI (par defaut `claude`). Les tests y mettent un faux CLI. */
   claude?: { cmd: string; args: string[] }
   timeoutMs?: number
+  /** Plafonds PAR MESSAGE (une invocation du CLI) : nombre de tours et cout estime en dollars ; 0 = pas de plafond. Defaut : variables AI_MAX_TURNS (60) et AI_MAX_BUDGET_USD (2). */
+  maxTurns?: number
+  maxBudgetUsd?: number
   /** Outils autorises pour l'IA (regles de permissions Claude Code). */
   allow?: string[]
   deny?: string[]
@@ -93,7 +97,11 @@ export function describeStreamEvent(obj: unknown, cwd: string): Step[] {
 
 const field = (p: unknown, key: string): unknown => (p && typeof p === 'object' ? (p as Record<string, unknown>)[key] : undefined)
 
-interface ClaudeResult { text: string; sessionId: string | null; costUsd: number | null; durationMs: number | null; turns: number | null }
+interface ClaudeResult { text: string; sessionId: string | null; costUsd: number | null; durationMs: number | null; turns: number | null; /** Un plafond (tours ou cout) a interrompu la reponse. */ limit?: 'turns' | 'budget' }
+
+/** Le contexte complet (regles, atelier, branche) est renvoye au plus tous les N messages meme s'il n'a pas change : la compaction automatique de Claude peut en resumer les details. */
+export const CONTEXT_REFRESH = 10
+const envNum = (name: string, fallback: number) => { const v = Number(process.env[name]); return Number.isFinite(v) && v >= 0 ? v : fallback }
 
 // Le CLI affiche un seul objet JSON (--output-format json) ; on lit le dernier objet de la sortie pour ignorer d'eventuels avertissements avant.
 export function parseClaudeOutput(out: string): ClaudeResult {
@@ -104,6 +112,14 @@ export function parseClaudeOutput(out: string): ClaudeResult {
       const j = JSON.parse(c) as Record<string, unknown>
       if (j.type !== 'result' && typeof j.result !== 'string') continue
       const text = typeof j.result === 'string' ? j.result : ''
+      // un plafond atteint n'est pas un echec : le travail deja fait est conserve et la conversation reprend avec « continue »
+      if (j.subtype === 'error_max_turns' || j.subtype === 'error_max_budget_usd') {
+        return {
+          text: typeof j.result === 'string' ? j.result.slice(0, MAX_TEXT) : '', sessionId: typeof j.session_id === 'string' && SESSION_ID.test(j.session_id) ? j.session_id : null,
+          costUsd: typeof j.total_cost_usd === 'number' ? j.total_cost_usd : null, durationMs: typeof j.duration_ms === 'number' ? j.duration_ms : null, turns: typeof j.num_turns === 'number' ? j.num_turns : null,
+          limit: j.subtype === 'error_max_turns' ? 'turns' : 'budget',
+        }
+      }
       if (j.is_error === true) throw new GitError(`Claude a signale une erreur : ${text.slice(0, 500) || String(j.subtype ?? 'erreur')}`)
       return {
         text: text.slice(0, MAX_TEXT),
@@ -242,6 +258,8 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
       const model = field(ctx.payload, 'model')
       if (model !== undefined && model !== null && model !== '' && (typeof model !== 'string' || !MODEL.test(model))) throw new GitError('Modele invalide.')
       const push = field(ctx.payload, 'push') !== false
+      const maxTurns = o.maxTurns ?? envNum('AI_MAX_TURNS', 60)
+      const maxBudget = o.maxBudgetUsd ?? envNum('AI_MAX_BUDGET_USD', 2)
       const p = chatPayload(ctx.payload)
 
       const work = async () => {
@@ -287,6 +305,8 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         const pluginDir = o.pluginDir ?? join(WORKER_DIR, '..', 'ui-framework', 'plugin')
         const session = await toolServer.register([...chatTools(state), ...libraryTools({ ctx, atelier: cwd, project: () => ({ open: state.branchOpen, dir: paths && state.branchOpen ? paths.worktree : null }) })], ctx.signal)
         let result: ClaudeResult
+        let contextHash = ''
+        let contextSent = true
         let previews: PreviewResult[] = []
         let fixed = false
         try {
@@ -302,7 +322,12 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
             if (resume) args.push('--resume', resume)
             if (model) args.push('--model', model as string)
             if (effort) args.push('--effort', effort as string)
-            return parseClaudeOutput(await runClaude(claude.cmd, args, cwd, text, ctx, o.timeoutMs ?? 30 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, cwd)) ctx.event('info', s.text, s.kind) }))
+            if (maxTurns > 0) args.push('--max-turns', String(Math.floor(maxTurns)))
+            if (maxBudget > 0) args.push('--max-budget-usd', String(maxBudget))
+            let lastText = ''
+            const parsed = parseClaudeOutput(await runClaude(claude.cmd, args, cwd, text, ctx, o.timeoutMs ?? 30 * 60_000, (obj) => { for (const s of describeStreamEvent(obj, cwd)) { ctx.event('info', s.text, s.kind); if (s.kind === 'text') lastText = s.text } }))
+            if (parsed.limit && !parsed.text) parsed.text = lastText // un plafond ne laisse pas de resultat final : on garde ce que l'IA avait deja ecrit
+            return parsed
           }
           const context = () => contextBlock({ atelier: cwd, project: p.project, reference: paths?.repo ?? null, worktree: paths?.worktree ?? null, open: state.branchOpen })
           const build = (text: string) => {
@@ -311,9 +336,17 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
             return buildPreviews(text, { project: roots.project, sandbox: roots.sandbox, emulatorDir: o.emulatorDir, images: join(cwd, '_library'), upload: ctx.uploadPreview, signal: ctx.signal, event: ctx.event })
           }
           ctx.event('info', sessionId ? 'Claude reprend la conversation…' : 'Claude demarre…')
-          result = await turn(context() + attachmentsBlock(delivered) + prompt, sessionId as string | null)
+          // Le contexte (regles, atelier, branche : ~900 tokens) n'est envoye que s'il a change, au demarrage d'une conversation, ou tous les CONTEXT_REFRESH messages :
+          // la conversation Claude le garde en memoire, le renvoyer a chaque message le ferait s'accumuler dans l'historique.
+          const contextText = context()
+          contextHash = createHash('sha1').update(contextText).digest('hex').slice(0, 16)
+          const previousHash = field(ctx.payload, 'contextHash')
+          const age = field(ctx.payload, 'contextAge')
+          contextSent = !sessionId || previousHash !== contextHash || typeof age !== 'number' || age >= CONTEXT_REFRESH
+          result = await turn((contextSent ? contextText : '[Demande]\n') + attachmentsBlock(delivered) + prompt, sessionId as string | null)
+          if (result.limit) result.text = `${result.text ? `${result.text}\n\n` : ''}⚠️ ${result.limit === 'turns' ? `Limite de ${maxTurns} tours atteinte` : `Plafond de ${maxBudget} $ atteint`} : je me suis arrete ici pour controler la consommation. Ecris « continue » pour poursuivre (le travail deja fait est conserve).`
           previews = await build(result.text)
-          const problems = fixRequest(previews)
+          const problems = result.limit ? '' : fixRequest(previews)
           if (problems && result.sessionId && (o.fixRounds ?? 1) > 0) {
             ctx.event('info', "Un apercu pose probleme : l'IA le corrige…")
             const first = result
@@ -361,6 +394,7 @@ export function aiHandlers(o: AiOptions): Record<string, JobHandler> {
         }
         return {
           text: result.text, sessionId: result.sessionId, costUsd: result.costUsd, durationMs: result.durationMs, turns: result.turns,
+          limit: result.limit ?? null, contextHash, contextSent,
           chatId: p.chatId, project: p.project?.slug ?? null,
           // la branche n'existe (pour l'utilisateur) qu'une fois ouverte ; `branchOpened` : ouverte pendant CE tour
           branch: state.branchOpen ? p.project!.branch : null, branchOpened: state.branchOpen && !p.project?.open, atelierSeeded: atelier.seeded,

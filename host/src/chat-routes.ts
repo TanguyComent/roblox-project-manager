@@ -2,7 +2,7 @@
 // et un endpoint « live » que la page interroge pour se mettre a jour sans rechargement.
 import type { Context, Hono } from 'hono'
 import type { Env } from './app.ts'
-import { chatListHtml, chatPage, threadHtml } from './chat-views.ts'
+import { chatCostLabel, chatListHtml, chatPage, threadHtml } from './chat-views.ts'
 import {
   DEFAULT_TITLE, MAX_PROMPT, allJobIds, activityByJob, addExchange, createChat, deleteChat, effortOk, getChat, hasPendingReply, listChats, listMessages, markSeen, modelOk,
   pendingJobIds, renameChat, setChatPrefs, syncChat, titleFromFirstMessage, titleProblem, type Chat,
@@ -127,6 +127,7 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
       busy: s.chats.some((x) => x.state === 'running' || x.state === 'queued'),
       unread: s.chats.filter((x) => x.state === 'unread').length,
       title: s.chat?.title ?? '',
+      cost: chatCostLabel(s.messages),
     })
   })
 
@@ -161,8 +162,9 @@ export function chatRoutes(app: Hono<Env>, ctx: Ctx) {
     // s'il y en a un, jamais pousse). Le projet (depot GitHub) est lu et sa branche ouverte A LA DEMANDE de l'IA, quand elle doit vraiment le modifier ;
     // `open` dit si elle l'a deja fait. Un projet sans depot : l'atelier seul.
     const template = uiTemplateOf(db, a.user.id, config.uiTemplateRepo)
+    const ctxState = db.prepare('SELECT context_hash, context_age FROM chats WHERE id = ?').get(current.id) as { context_hash: string | null; context_age: number }
     const jobId = hub.enqueue(a.user.id, 'ai.chat', {
-      chatId: current.id, prompt, sessionId, model: model || null, effort: effort || null, push: true,
+      chatId: current.id, prompt, sessionId, contextHash: ctxState.context_hash, contextAge: ctxState.context_age, model: model || null, effort: effort || null, push: true,
       project: project.github_repo ? { slug: project.slug, url: `https://github.com/${project.github_repo}.git`, branch: current.branch, base: null, open: current.branch_open } : null,
       attachments: chatAttachments(db, current.id).concat(files).map((x) => ({ id: x.id, name: x.name, kind: x.kind, mime: x.mime, size: x.size, sha256: x.sha256, current: files.includes(x) })),
       atelier: template ? { url: `https://github.com/${template.repo}.git`, base: template.branch } : null,

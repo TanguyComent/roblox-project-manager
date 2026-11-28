@@ -38,6 +38,9 @@ emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'Je
 emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: process.cwd() + '/a.txt' } }] } })
 emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'un' }] } })
 emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'Je vais ajouter un fichier.' }] } })
+for (const [kw, subtype, msg] of [['MAXTURNS', 'error_max_turns', 'Reached maximum number of turns'], ['MAXBUDGET', 'error_max_budget_usd', 'Reached maximum budget']]) {
+  if (user.includes(kw)) { flush(); console.log(JSON.stringify({ type: 'result', subtype, is_error: true, session_id: flag('--resume') ?? '11111111-2222-3333-4444-555555555555', total_cost_usd: 0.3, duration_ms: 10, num_turns: 3, errors: [msg] })); process.exit(0) }
+}
 
 // --- les outils du Worker, par le protocole MCP (HTTP) ---------------------------------------------------------------------------------------
 let rid = 0

@@ -291,6 +291,9 @@ export const MIGRATIONS = [
    );`,
   // 18 : dossier d'origine d'une image importee depuis un pack ZIP (indice de classement pour l'agent).
   `ALTER TABLE library_images ADD COLUMN hint TEXT NOT NULL DEFAULT '';`,
+  // 19 : contexte automatique des chats envoye seulement quand il change (empreinte du dernier contexte envoye, messages depuis) : voir worker/src/ai.ts.
+  `ALTER TABLE chats ADD COLUMN context_hash TEXT;
+   ALTER TABLE chats ADD COLUMN context_age INTEGER NOT NULL DEFAULT 0;`,
 ]
 
 export function openDb(file?: string): Db {

@@ -82,6 +82,8 @@
     const wasPending = app.dataset.pending === 'true'
     setPending(j.pending)
     if (wasPending && !j.pending && textarea && !textarea.disabled && document.activeElement === document.body) textarea.focus()
+    const costEl = document.getElementById('chat-cost')
+    if (costEl && typeof j.cost === 'string') { costEl.textContent = j.cost; costEl.hidden = !j.cost }
     document.title = (j.unread ? `(${j.unread}) ` : '') + baseTitle
     return j
   }

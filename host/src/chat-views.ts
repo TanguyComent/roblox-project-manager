@@ -52,6 +52,11 @@ export function chatListHtml(o: { project: Project; chats: Chat[]; activeId: num
 }
 
 const money = (n: number | null | undefined) => (typeof n === 'number' ? `${n.toFixed(n < 0.1 ? 3 : 2)} $` : '')
+/** Cout estime cumule des reponses d'un chat (estimation du CLI : sur abonnement, ce sont les limites d'usage qui sont consommees, pas ces dollars). */
+export const chatCostLabel = (messages: ChatMessage[]): string => {
+  const costs = messages.flatMap((m) => (typeof m.details?.costUsd === 'number' ? [m.details.costUsd] : []))
+  return costs.length ? `≈ ${money(costs.reduce((a, b) => a + b, 0))} · ${costs.length} reponse${costs.length > 1 ? 's' : ''}` : ''
+}
 const duration = (ms: number | null | undefined) => (typeof ms === 'number' ? (ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : `${Math.round(ms / 60_000)} min`) : '')
 
 // Etapes visibles : pensee, outils, texte intermediaire, et les deux messages d'avancement du Worker (le reste est du bruit git).
@@ -107,6 +112,7 @@ function assistantHtml(m: ChatMessage, events: JobEvent[], previews: PreviewRow[
       d.commits?.length ? `${d.commits.length} commit${d.commits.length > 1 ? 's' : ''}` : 'aucune modification',
       d.commits?.length ? (d.pushed ? 'pousse sur GitHub' : '<span class="warn-text">non pousse</span>') : '',
       duration(d.durationMs), money(d.costUsd),
+      d.limit ? `<span class="warn-text" title="La reponse a ete interrompue pour controler la consommation : ecris « continue » pour poursuivre.">${d.limit === 'turns' ? 'limite de tours atteinte' : 'plafond de cout atteint'}</span>` : '',
     ].filter(Boolean) : []
     body = `<div class="answer md">${renderMarkdown(m.content, { uiBlock: (n) => uiBlockHtml(n, previews) })}</div>
     ${d ? `<div class="reply-meta">${meta.map((x) => `<span>${x}</span>`).join('<span aria-hidden="true">·</span>')}<span class="stamp">${esc(ago(m.created_at))}</span></div>
@@ -179,7 +185,7 @@ export function chatPage(o: Viewer & ChatPageData) {
       <header class="chat-head">
         <div class="ttl">
           <h1>${esc(c.title)}</h1>
-          <div class="meta">${c.branch_open
+          <div class="meta"><span class="chip" id="chat-cost" title="Cout estime cumule des reponses de ce chat (estimation du CLI Claude Code ; sur abonnement, ce sont tes limites d'usage qui sont consommees)"${chatCostLabel(o.messages) ? '' : ' hidden'}>${esc(chatCostLabel(o.messages))}</span>${c.branch_open
             ? `<span class="chip" title="Branche de travail du projet, ouverte par l'IA">${I.branch}${esc(c.branch)}</span>`
             : '<span class="chip accent" title="Dossier libre de ce chat : l\'IA y discute et y imagine des interfaces. Aucune branche, rien n\'est pousse sur GitHub tant que le projet n\'est pas modifie.">Atelier</span>'}${c.worker_name ? `<span class="chip" title="Worker qui detient ce chat">${I.worker}${esc(c.worker_name)}</span>` : ''}</div>
         </div>
